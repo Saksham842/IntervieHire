@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  interviewer_os:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENV=development
+      - PORT=8000
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8000
+    volumes:
+      - ./static:/app/static  # hot-reload static files in dev
+    restart: unless-stopped
+
+  # Uncomment to add Redis for production session storage
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
