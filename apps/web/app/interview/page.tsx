@@ -173,18 +173,12 @@ export default function Interview(){
           </div>
 
           <div className="relative aspect-video overflow-hidden rounded-[2rem] bg-gradient-to-br from-cyan-300 via-slate-800 to-slate-950">
-            <div className="absolute inset-0 grid place-items-center">
-              <div className="text-center">
-                <div className="mx-auto mb-5 flex h-40 w-40 items-center justify-center rounded-full bg-white/20 shadow-[0_0_80px_rgba(103,232,249,.5)] ring-8 ring-white/10">
-                  <img
-                    src="/avatar-placeholder.svg"
-                    alt="AI interviewer avatar"
-                    className="h-32 w-32 rounded-full object-cover"
-                  />
-                </div>
-                <h2 className="text-2xl font-bold">AI Interviewer</h2>
-                <p className="text-cyan-100">Avatar bridge ready: UE5 / WebRTC / Convai lip-sync payloads</p>
-              </div>
+            <div className="absolute inset-0">
+              <iframe
+                src={process.env.NEXT_PUBLIC_PIXEL_STREAMING_URL || 'http://localhost:8888'}
+                className="h-full w-full border-0"
+                allow="microphone; camera; autoplay; fullscreen"
+              />
             </div>
             <video ref={videoRef} muted playsInline className="absolute bottom-5 right-5 h-36 w-52 rounded-2xl border border-white/20 object-cover shadow-2xl"/>
           </div>
