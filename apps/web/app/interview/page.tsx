@@ -5,6 +5,8 @@ import { WS_URL, API_URL } from '@/lib/api';
  import { useSpeechMetrics } from '@/hooks/useSpeechMetrics';
 import { Mic, Send, ShieldCheck, Timer, Video } from 'lucide-react';
 
+const AVATAR_URL = process.env.NEXT_PUBLIC_AVATAR_URL || 'http://172.24.64.1/';
+
 export default function Interview(){
   const [sessionId,setSessionId]=useState('demo-session');
   const [socket,setSocket]=useState<WebSocket|null>(null);
@@ -175,7 +177,8 @@ export default function Interview(){
           <div className="relative aspect-video overflow-hidden rounded-[2rem] bg-gradient-to-br from-cyan-300 via-slate-800 to-slate-950">
             <div className="absolute inset-0">
               <iframe
-                src={process.env.NEXT_PUBLIC_PIXEL_STREAMING_URL || 'http://localhost:8888'}
+                src={AVATAR_URL}
+                title="AI interviewer avatar"
                 className="h-full w-full border-0"
                 allow="microphone; camera; autoplay; fullscreen"
               />
