@@ -382,7 +382,8 @@ function mapPoints(points: unknown): EvaluationPoint[] {
 
   return points
     .map((point, index) => {
-      const value = (point ?? {}) as { id?: unknown; description?: unknown; weight?: unknown };
+      // Tolerate legacy string[] rubric points (pre-v2 excellentAnswerSignals).
+      const value = (typeof point === 'string' ? { description: point } : (point ?? {})) as { id?: unknown; description?: unknown; weight?: unknown };
       const description = typeof value.description === 'string' ? value.description.trim() : '';
       const weight = Number.isFinite(Number(value.weight)) && Number(value.weight) > 0 ? Number(value.weight) : 1;
 

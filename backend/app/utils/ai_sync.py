@@ -15,6 +15,39 @@ def slugify(text: str) -> str:
     text = re.sub(r'[^a-z0-9]+', '-', text)
     return text.strip('-')
 
+
+def _extract_blueprint_qid(guidance) -> Optional[str]:
+    """The studio embeds a stable blueprintQuestionId in the aiEvaluationGuidance
+    v2 envelope. Returning it lets us upsert questions by id instead of fragile
+    text equality (an edited prompt would otherwise orphan its row + history)."""
+    if not guidance or not isinstance(guidance, str):
+        return None
+    try:
+        data = json.loads(guidance)
+    except Exception:
+        return None
+    return data.get("blueprintQuestionId") if isinstance(data, dict) else None
+
+
+def _is_valid_guidance(guidance) -> bool:
+    """True when guidance is a well-formed aiEvaluationGuidance payload (parses to
+    a dict carrying a questionType or a non-empty rubric.requiredPoints). Lets the
+    caller log + still store a legacy/plain string rather than silently shipping a
+    broken payload that only fails at eval time."""
+    if not guidance or not isinstance(guidance, str):
+        return False
+    try:
+        data = json.loads(guidance)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if data.get("questionType"):
+        return True
+    rubric = data.get("rubric")
+    return isinstance(rubric, dict) and bool(rubric.get("requiredPoints"))
+
+
 def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[InterviewSession]:
     try:
         # Load relationships if not fully loaded
@@ -109,6 +142,14 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
 
         # 3. Sync Candidate
         candidate_id = str(applicant.id)
+        # Extract résumé text so the engine can generate résumé-grounded questions.
+        resume_text = ""
+        try:
+            if applicant.resume_url:
+                from app.utils.resume_parser import extract_text_from_file
+                resume_text = extract_text_from_file(applicant.resume_url) or ""
+        except Exception:
+            resume_text = ""
         candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
         if not candidate:
             candidate = Candidate(
@@ -117,7 +158,7 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                 fullName=applicant.name,
                 email=applicant.email,
                 phone=applicant.phone,
-                resumeText="",
+                resumeText=resume_text,
                 parsedResume={},
                 atsScore=0.0,
                 atsBreakdown={}
@@ -129,6 +170,12 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
             candidate.fullName = applicant.name
             candidate.email = applicant.email
             candidate.phone = applicant.phone
+            # Refresh résumé text; if it changed, drop cached résumé questions so they regenerate.
+            if resume_text and resume_text != (candidate.resumeText or ""):
+                candidate.resumeText = resume_text
+                pr = candidate.parsedResume if isinstance(candidate.parsedResume, dict) else {}
+                if "resumeQuestions" in pr:
+                    candidate.parsedResume = {k: v for k, v in pr.items() if k != "resumeQuestions"}
             db.commit()
 
         # 4. Sync InterviewSession — always reset to SCHEDULED so re-advances generate a fresh interview
@@ -236,7 +283,23 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                     params = json.loads(job.functional_parameters) if isinstance(job.functional_parameters, str) else job.functional_parameters
                     if isinstance(params, dict):
                         topics = params.get("topics", [])
-                        
+
+                        # Index existing questions by their authored blueprintQuestionId
+                        # so an edited prompt updates its row in place (preserving
+                        # effectivenessRating/version) instead of orphaning it.
+                        existing_by_bp_qid = {}
+                        for eq in db.query(Question).filter(
+                            Question.companyId == company_id,
+                            Question.jobRoleId == role_id,
+                        ).all():
+                            bp_qid = _extract_blueprint_qid(eq.aiEvaluationGuidance)
+                            if bp_qid:
+                                existing_by_bp_qid[bp_qid] = eq
+
+                        # Tracks blueprintQuestionIds already upserted in THIS sync so a
+                        # duplicate id in the payload can't collapse two questions onto one row.
+                        seen_bp_qids = set()
+
                         for topic in topics:
                             topic_name = topic.get("name", "General")
                             topic_difficulty = str(topic.get("difficulty", "MEDIUM")).upper()
@@ -257,6 +320,7 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                                         "difficulty": str(qd.get("difficulty") or topic_difficulty).upper(),
                                         "guidance": qd.get("aiEvaluationGuidance") or f"Evaluate response for topic: {topic_name}",
                                         "estMin": qd.get("estimatedMinutes") or 4,
+                                        "bp_qid": qd.get("id"),
                                     })
                             else:
                                 q_items = [{
@@ -274,19 +338,51 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                                 if q_diff not in ["EASY", "MEDIUM", "HARD"]:
                                     q_diff = topic_difficulty
 
-                                # Find existing question
-                                existing_q = db.query(Question).filter(
-                                    Question.companyId == company_id,
-                                    Question.jobRoleId == role_id,
-                                    Question.text == q_text
-                                ).first()
+                                guidance = q_item["guidance"]
+                                if not _is_valid_guidance(guidance):
+                                    logger.warning(
+                                        f"Question '{q_text[:60]}' has non-structured aiEvaluationGuidance; "
+                                        f"storing as-is (eval will fall back to coarse scoring)."
+                                    )
+
+                                # Match by the stable blueprintQuestionId first so an
+                                # edited prompt updates its row in place; fall back to
+                                # text equality for legacy questions that carry no id.
+                                bp_qid = q_item.get("bp_qid")
+                                if bp_qid:
+                                    if bp_qid in seen_bp_qids:
+                                        logger.warning(
+                                            f"Duplicate blueprintQuestionId '{bp_qid}' in payload — "
+                                            f"skipping duplicate '{q_text[:50]}'."
+                                        )
+                                        continue
+                                    seen_bp_qids.add(bp_qid)
+
+                                existing_q = existing_by_bp_qid.get(bp_qid) if bp_qid else None
+                                if not existing_q:
+                                    text_match = db.query(Question).filter(
+                                        Question.companyId == company_id,
+                                        Question.jobRoleId == role_id,
+                                        Question.text == q_text
+                                    ).first()
+                                    # Only reuse a text-match that isn't already bound to a
+                                    # DIFFERENT blueprint question, so we never rebind (and
+                                    # then double-overwrite) another question's stable row.
+                                    if text_match:
+                                        tm_bp = _extract_blueprint_qid(text_match.aiEvaluationGuidance)
+                                        if tm_bp is None or tm_bp == bp_qid:
+                                            existing_q = text_match
 
                                 if existing_q:
+                                    existing_q.text = q_text
                                     existing_q.isActive = True
                                     existing_q.difficulty = Difficulty[q_diff]
                                     existing_q.topicCategories = [topic_name]
-                                    existing_q.aiEvaluationGuidance = q_item["guidance"]
+                                    existing_q.estimatedMinutes = q_item["estMin"]
+                                    existing_q.aiEvaluationGuidance = guidance
                                     active_question_ids.append(existing_q.id)
+                                    if bp_qid:
+                                        existing_by_bp_qid[bp_qid] = existing_q
                                 else:
                                     import uuid
                                     new_q = Question(
@@ -298,7 +394,7 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                                         difficulty=Difficulty[q_diff],
                                         topicCategories=[topic_name],
                                         estimatedMinutes=q_item["estMin"],
-                                        aiEvaluationGuidance=q_item["guidance"],
+                                        aiEvaluationGuidance=guidance,
                                         effectivenessRating=0.0,
                                         version=1,
                                         isActive=True
@@ -306,6 +402,8 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                                     db.add(new_q)
                                     db.flush()
                                     active_question_ids.append(new_q.id)
+                                    if bp_qid:
+                                        existing_by_bp_qid[bp_qid] = new_q
                 except Exception as q_sync_err:
                     logger.error(f"Error syncing questions: {q_sync_err}")
 

@@ -8,6 +8,7 @@ import { stopActiveCardPlayer, toggleCardPlayer } from './kanban-dnd.js';
 import { recalculateJobPipelines, renderKanbanBoard } from './kanban-swarm.js';
 import { triggerExcelExport } from './navigation.js';
 import { renderBlueprintStudio } from './blueprint-studio.js';
+import { renderTestInterviewPane } from './test-interview.js';
 import { filterCandidatesByDateRange, renderAnalyticsTable, renderJobCards, updateSummaryMetrics } from './render-views.js';
 import { openReportDrawerForCandidate } from './report.js';
 import { applyStageFilters, buildFilterDropdown, hasActiveFilters, openScheduleModal, renderResumeStagePaneForJob, toggleResumeCriteriaEdit } from './resume-analysis.js';
@@ -654,6 +655,12 @@ function renderJobDetailPanes(job) {
     });
   }
   renderBlueprintStudio(job);
+
+  // Test Interview pane — dev launcher for a full run of this job's blueprint.
+  const testInterviewList = document.getElementById('list-stage-testinterview');
+  if (testInterviewList) {
+    renderTestInterviewPane(job, testInterviewList);
+  }
 }
 
 function updateCandidateStatus(candId, newStatus) {

@@ -14,6 +14,7 @@ import {
   MODE_FUNCTIONAL, MODE_SCREENING, CONTRACT_DIFFICULTY, TOPIC_TYPES, QUESTION_TYPES, SEVERITY_LEVELS,
   migrateLegacyQuestions, emptyScreeningBlueprint, createTopic, createQuestionBlueprint, createRubricPoint, createRedFlag,
   generateFunctionalOutline, enrichQuestionRubric, generateScreeningQuestions, generateGapQuestion, generateScenarioVariant,
+  computeGenerationPlan, analyzeRequirements, pinBlueprintToRequirements,
   localFunctionalBlueprint, localScreeningQuestions, localGapQuestion, localScenarioVariant,
   computeCoverage, computeCalibration, computeBandFit, rubricStrength, critiqueRubric, critiqueBlueprint, leakageRisk,
 } from './blueprint-engine.js';
@@ -74,6 +75,13 @@ function findQuestion(job, qid) {
   }
   const sq = screeningOf(job).questions.find((x) => x.id === qid);
   return sq ? { q: sq, topic: null } : { q: null, topic: null };
+}
+// The rubric point array for an editor "kind" (required | secondary | excellent).
+function pointsOf(q, kind) {
+  if (!q || !q.rubric) return null;
+  if (kind === 'secondary') return q.rubric.secondaryPoints;
+  if (kind === 'excellent') return q.rubric.excellentAnswerSignals;
+  return q.rubric.requiredPoints;
 }
 // Every mutation flows through persist(): localStorage always (the local cache
 // + 'local' mode source of truth), plus a debounced backend PATCH in api mode.
@@ -304,6 +312,14 @@ function questionEditor(q) {
       ${r.requiredPoints.map((p, i) => pointRow(q.id, 'required', i, p)).join('')}
       <button class="bs-mini-btn ghost" data-action="add-point" data-q-id="${q.id}" data-kind="required">+ point</button>
 
+      <div class="bs-rg-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Secondary points <span class="bs-faint">· nice-to-have, lower weight</span></div>
+      ${r.secondaryPoints.map((p, i) => pointRow(q.id, 'secondary', i, p)).join('')}
+      <button class="bs-mini-btn ghost" data-action="add-point" data-q-id="${q.id}" data-kind="secondary">+ point</button>
+
+      <div class="bs-rg-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2"><polygon points="12 2 15 9 22 9 17 14 19 21 12 17 5 21 7 14 2 9 9 9"/></svg> Excellence signals <span class="bs-faint">· separates great from good</span></div>
+      ${r.excellentAnswerSignals.map((p, i) => pointRow(q.id, 'excellent', i, p)).join('')}
+      <button class="bs-mini-btn ghost" data-action="add-point" data-q-id="${q.id}" data-kind="excellent">+ signal</button>
+
       <div class="bs-rg-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg> Red flags</div>
       ${r.redFlags.map((f, i) => flagRow(q.id, i, f)).join('')}
       <button class="bs-mini-btn ghost" data-action="add-flag" data-q-id="${q.id}">+ red flag</button>
@@ -314,13 +330,17 @@ function questionEditor(q) {
 }
 
 function pointRow(qid, kind, idx, p) {
+  const showWeight = kind !== 'excellent';
   return `
-  <div class="bs-point">
-    <input class="bs-input bs-point-text" data-action="edit-point" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}" data-field="description" value="${escapeHTML(p.description)}" placeholder="What a correct answer covers…" />
-    <div class="bs-weight" data-action="set-weight" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}">
-      ${[1, 2, 3].map((w) => `<span class="bs-wdot ${p.weight >= w ? 'on' : ''}" data-w="${w}" title="weight ${w}"></span>`).join('')}
+  <div class="bs-point-wrap">
+    <div class="bs-point">
+      <input class="bs-input bs-point-text" data-action="edit-point" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}" data-field="description" value="${escapeHTML(p.description)}" placeholder="What a correct answer covers…" />
+      ${showWeight ? `<div class="bs-weight" data-action="set-weight" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}">
+        ${[1, 2, 3].map((w) => `<span class="bs-wdot ${p.weight >= w ? 'on' : ''}" data-w="${w}" title="weight ${w}"></span>`).join('')}
+      </div>` : ''}
+      <button class="bs-icon-btn" data-action="remove-point" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}" title="Remove"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <button class="bs-icon-btn" data-action="remove-point" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}" title="Remove"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <input class="bs-input bs-point-kw" data-action="edit-point" data-q-id="${qid}" data-kind="${kind}" data-idx="${idx}" data-field="keywords" value="${escapeHTML((p.keywords || []).join(', '))}" placeholder="keywords the evaluator matches · comma-separated" />
   </div>`;
 }
 
@@ -498,15 +518,16 @@ function bindStudio(pane, job) {
         screeningOf(job).questions.push(nq); persist(); reRender(); break;
       }
       case 'delete-question': deleteQuestion(job, qid); persist(); reRender(); break;
-      case 'add-point': { const { q } = findQuestion(job, qid); if (q) { (el.dataset.kind === 'required' ? q.rubric.requiredPoints : q.rubric.secondaryPoints).push(createRubricPoint('', el.dataset.kind === 'required' ? 2 : 1)); persist(); reRender(); } break; }
-      case 'remove-point': { const { q } = findQuestion(job, qid); if (q) { q.rubric.requiredPoints.splice(Number(el.dataset.idx), 1); persist(); reRender(); } break; }
+      case 'add-point': { const { q } = findQuestion(job, qid); const pts = pointsOf(q, el.dataset.kind); if (pts) { pts.push(createRubricPoint('', el.dataset.kind === 'required' ? 2 : 1)); persist(); reRender(); } break; }
+      case 'remove-point': { const { q } = findQuestion(job, qid); const pts = pointsOf(q, el.dataset.kind); if (pts) { pts.splice(Number(el.dataset.idx), 1); persist(); reRender(); } break; }
       case 'add-flag': { const { q } = findQuestion(job, qid); if (q) { q.rubric.redFlags.push(createRedFlag('', 'medium')); persist(); reRender(); } break; }
       case 'remove-flag': { const { q } = findQuestion(job, qid); if (q) { q.rubric.redFlags.splice(Number(el.dataset.idx), 1); persist(); reRender(); } break; }
       case 'set-weight': {
         const dot = e.target.closest('.bs-wdot'); if (!dot) break;
         const { q } = findQuestion(job, qid); if (!q) break;
         const w = Number(dot.dataset.w);
-        const pt = q.rubric.requiredPoints[Number(el.dataset.idx)];
+        const pts = pointsOf(q, el.dataset.kind);
+        const pt = pts && pts[Number(el.dataset.idx)];
         if (pt) pt.weight = w;
         // update dots in place so the editor doesn't re-render and lose focus/flicker
         el.querySelectorAll('.bs-wdot').forEach((d) => d.classList.toggle('on', Number(d.dataset.w) <= w));
@@ -526,8 +547,9 @@ function bindStudio(pane, job) {
     if (el.dataset.action === 'edit') {
       q[field] = field === 'estimatedMinutes' ? Number(el.value) : el.value;
     } else if (el.dataset.action === 'edit-point') {
-      const p = q.rubric.requiredPoints[Number(el.dataset.idx)];
-      if (p) p[field] = el.value;
+      const pts = pointsOf(q, el.dataset.kind);
+      const p = pts && pts[Number(el.dataset.idx)];
+      if (p) p[field] = field === 'keywords' ? el.value.split(',').map((k) => k.trim()).filter(Boolean) : el.value;
     } else if (el.dataset.action === 'edit-flag') {
       const f = q.rubric.redFlags[Number(el.dataset.idx)];
       if (f) f[field] = el.value;
@@ -669,6 +691,9 @@ async function handleDraftGap(job, requirement, reRender) {
   let offline = false;
   try { q = await generateGapQuestion(job, requirement); }
   catch { q = localGapQuestion(job, requirement); offline = true; }
+  // Pin it so the coverage panel registers this requirement as covered (and the
+  // "+ Q" button stops offering to draft a duplicate for the same requirement).
+  q.targetRequirement = requirement;
 
   const fb = functionalOf(job);
   let topic = fb.topics.find((t) => t.name === GAP_TOPIC_NAME);
@@ -714,10 +739,28 @@ async function handleGenerate(job, reRender) {
     return;
   }
 
-  // Functional — phase 1: outline (small, fits the token cap)
+  // Functional — phase 1: outline (small, fits the token cap), scaled to the
+  // role's complexity and pinned to its required competencies.
+  const plan = computeGenerationPlan(job);
+  let requirements = plan.requirements;
+  // Isolate the (non-throwing) pre-pass so an LLM-expanded list never leaks into
+  // the offline path's pinning, then size topicCount to the RESOLVED requirement
+  // count so the outline prompt's "~N topics" hint can fit "cover every one".
+  try { requirements = await analyzeRequirements(job); } catch { requirements = plan.requirements; }
+  const topicCount = Math.min(6, Math.max(plan.topicCount, Math.ceil(requirements.length / plan.questionsPerTopic) || plan.topicCount));
+
   let fb, aiOk = true;
-  try { fb = await generateFunctionalOutline(job); if (!fb.topics.length) throw new Error('empty'); }
-  catch { fb = localFunctionalBlueprint(job); aiOk = false; }
+  try {
+    fb = await generateFunctionalOutline(job, { topicCount, questionsPerTopic: plan.questionsPerTopic, requirements });
+    if (!fb.topics.length) throw new Error('empty');
+  } catch {
+    fb = localFunctionalBlueprint(job);
+    aiOk = false;
+    requirements = plan.requirements; // offline template → pin to must-haves only, not the LLM-expanded list
+  }
+  // Pin every question to a required competency + fill any uncovered requirement
+  // with a targeted gap question, so coverage is complete on both paths.
+  fb = pinBlueprintToRequirements(job, fb, requirements);
   job.functionalParameters = fb;
   studioUi.expandedTopicId = fb.topics[0] ? fb.topics[0].id : null;
 

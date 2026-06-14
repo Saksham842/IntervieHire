@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { callDeepSeekJson } from './deepseek.service.js';
 import { analyzeAiAuthorship } from './ai-authorship.service.js';
+import { getEffectiveQuestions } from './effective-questions.js';
 import {
   aggregateEvalCandidateReport,
   analyzeTranscriptConfidence,
@@ -66,7 +67,7 @@ export async function evaluateInterview(sessionId: string): Promise<EvalCandidat
   if (!session) throw new Error('Session not found');
 
   const transcript = normalizeTranscript(session.transcript);
-  const questions = session.jobRole.questions as QuestionWithGuidance[];
+  const questions = getEffectiveQuestions(session) as unknown as QuestionWithGuidance[];
   const context: EvalInterviewContext = {
     interviewId: session.id,
     candidateId: session.candidateId,
@@ -557,18 +558,23 @@ function normalizeRubricPoints(
   points: EvalModelAnswerRubric['requiredPoints'] | undefined,
 ): EvalModelAnswerRubric['requiredPoints'] {
   return (Array.isArray(points) ? points : [])
-    .map((point, index) => ({
-      id: typeof point?.id === 'string' && point.id.trim()
-        ? point.id.trim()
-        : `rubric_point_${index + 1}`,
-      description: typeof point?.description === 'string' ? point.description.trim() : '',
-      keywords: Array.isArray(point?.keywords)
-        ? point.keywords.map((keyword) => String(keyword).trim()).filter(Boolean).slice(0, 12)
-        : undefined,
-      weight: Number.isFinite(point?.weight) && Number(point?.weight) > 0
-        ? Number(point.weight)
-        : 1,
-    }))
+    .map((raw: unknown, index) => {
+      // Tolerate legacy string[] rubric points (pre-v2 excellentAnswerSignals
+      // were stored as plain strings) by coercing them to a {description} point.
+      const point = (typeof raw === 'string' ? { description: raw } : (raw ?? {})) as { id?: unknown; description?: unknown; keywords?: unknown; weight?: number };
+      return {
+        id: typeof point?.id === 'string' && point.id.trim()
+          ? point.id.trim()
+          : `rubric_point_${index + 1}`,
+        description: typeof point?.description === 'string' ? point.description.trim() : '',
+        keywords: Array.isArray(point?.keywords)
+          ? point.keywords.map((keyword) => String(keyword).trim()).filter(Boolean).slice(0, 12)
+          : undefined,
+        weight: Number.isFinite(point?.weight) && Number(point?.weight) > 0
+          ? Number(point.weight)
+          : 1,
+      };
+    })
     .filter((point) => point.description);
 }
 

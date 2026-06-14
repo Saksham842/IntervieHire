@@ -18,6 +18,10 @@ export const QUESTION_TYPES = [
 export const TOPIC_TYPES = ['Theoretical', 'Experiential'];
 export const CONTRACT_DIFFICULTY = ['Easy', 'Medium', 'Hard'];
 export const SEVERITY_LEVELS = ['low', 'medium', 'high', 'critical'];
+// What KIND of assertion a rubric point grades — lets the evaluator calibrate
+// what a good answer to that point looks like (a 'tradeoff' point needs two
+// competing considerations named; a 'definition' point just needs the concept).
+export const POINT_TYPES = ['definition', 'comparison', 'example', 'tradeoff', 'constraint', 'procedure', 'application', 'general'];
 export const MODE_SCREENING = 'screening';
 export const MODE_FUNCTIONAL = 'functional';
 
@@ -44,10 +48,24 @@ const arr = (v) => (Array.isArray(v) ? v : []);
 const clampWeight = (w) => Math.max(1, Math.min(3, Math.round(Number(w) || 2)));
 const snakeId = (s, fallback) =>
   (clean(s) || fallback).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || fallback;
+const dedupeReqs = (list) => {
+  const seen = new Set(); const out = [];
+  arr(list).forEach((r) => { const c = clean(r); const k = c.toLowerCase(); if (c && !seen.has(k)) { seen.add(k); out.push(c); } });
+  return out;
+};
 
 // ── Factories ──────────────────────────────────────────────────────────────
-export function createRubricPoint(description = '', weight = 2, keywords = []) {
-  return { id: snakeId(description, uid('pt')), description: clean(description), keywords: arr(keywords).map((k) => clean(k)).filter(Boolean), weight: clampWeight(weight) };
+export function createRubricPoint(description = '', weight = 2, keywords = [], opts = {}) {
+  const point = { id: snakeId(description, uid('pt')), description: clean(description), keywords: arr(keywords).map((k) => clean(k)).filter(Boolean), weight: clampWeight(weight) };
+  // Richer, optional grading metadata (v2 rubric) — only set when present so the
+  // wire stays lean and legacy points are untouched.
+  const pointType = oneOf(opts.pointType, POINT_TYPES, '');
+  if (pointType) point.pointType = pointType;
+  const partialCredit = clean(opts.partialCredit);
+  if (partialCredit) point.partialCredit = partialCredit;
+  const antiPatterns = arr(opts.antiPatterns).map((a) => clean(a)).filter(Boolean);
+  if (antiPatterns.length) point.antiPatterns = antiPatterns;
+  return point;
 }
 
 export function createRedFlag(description = '', severity = 'medium') {
@@ -63,11 +81,20 @@ export function createQuestionBlueprint(overrides = {}) {
     difficulty,
     estimatedMinutes: Number(overrides.estimatedMinutes) || MINUTES_BY_DIFFICULTY[difficulty],
     competency: clean(overrides.competency),
+    targetRequirement: clean(overrides.targetRequirement),
     modelAnswer: clean(overrides.modelAnswer),
     rubric: {
-      requiredPoints: arr(overrides.rubric?.requiredPoints).map((p) => createRubricPoint(p.description, p.weight, p.keywords)),
-      secondaryPoints: arr(overrides.rubric?.secondaryPoints).map((p) => createRubricPoint(p.description, p.weight ?? 1, p.keywords)),
-      excellentAnswerSignals: arr(overrides.rubric?.excellentAnswerSignals).map((s) => clean(s)).filter(Boolean),
+      requiredPoints: arr(overrides.rubric?.requiredPoints).filter((p) => p && typeof p === 'object').map((p) => createRubricPoint(p.description, p.weight, p.keywords, p)),
+      secondaryPoints: arr(overrides.rubric?.secondaryPoints).filter((p) => p && typeof p === 'object').map((p) => createRubricPoint(p.description, p.weight ?? 1, p.keywords, p)),
+      // First-class rubric points (was a string[] — which both evaluators silently
+      // dropped). Accept legacy strings and rich objects; ignore null/garbage so a
+      // malformed/truncated LLM element can't throw on s.description.
+      // Drop only null/garbage (keep empty-description points so a just-added,
+      // not-yet-typed excellence signal survives a round-trip — same as required/
+      // secondary points). Empty points are ignored at eval time anyway.
+      excellentAnswerSignals: arr(overrides.rubric?.excellentAnswerSignals)
+        .map((s) => (typeof s === 'string' ? createRubricPoint(s, 1, []) : (s && typeof s === 'object' ? createRubricPoint(s.description, s.weight ?? 1, s.keywords, s) : null)))
+        .filter(Boolean),
       redFlags: arr(overrides.rubric?.redFlags).map((f) => createRedFlag(f.description, f.severity)),
     },
     followUpIntent: clean(overrides.followUpIntent),
@@ -158,6 +185,20 @@ export function critiqueRubric(qb) {
   const issues = [];
   const r = qb.rubric || {};
   arr(r.requiredPoints).forEach((p) => { const m = pointIssue(p); if (m) issues.push({ level: 'warn', kind: 'point', message: m }); });
+  // Measurability: a required point with no keywords can't be matched locally,
+  // and two points sharing most keywords always co-fire (weights become moot).
+  const reqPts = arr(r.requiredPoints).filter((p) => clean(p.description));
+  reqPts.forEach((p) => { if (!arr(p.keywords).filter(Boolean).length) issues.push({ level: 'info', kind: 'point', message: `“${clean(p.description)}” has no keywords — add a few so the evaluator can match it.` }); });
+  for (let i = 0; i < reqPts.length; i += 1) {
+    for (let j = i + 1; j < reqPts.length; j += 1) {
+      const a = new Set(arr(reqPts[i].keywords).map((k) => k.toLowerCase()).filter(Boolean));
+      const b = [...new Set(arr(reqPts[j].keywords).map((k) => k.toLowerCase()).filter(Boolean))];
+      if (a.size && b.length && b.filter((k) => a.has(k)).length / Math.max(a.size, b.length) > 0.5) {
+        issues.push({ level: 'info', kind: 'point', message: 'Two required points share most keywords — they will always score together; differentiate them.' });
+        i = reqPts.length; break;
+      }
+    }
+  }
   const flags = arr(r.redFlags);
   flags.forEach((f) => { const m = flagIssue(f, qb); if (m) issues.push({ level: 'warn', kind: 'flag', message: m }); });
   if (flags.length > 3) issues.push({ level: 'info', kind: 'flag', message: `${flags.length} red flags — keep only the few that truly disqualify.` });
@@ -165,11 +206,27 @@ export function critiqueRubric(qb) {
   return issues;
 }
 
-// Blueprint-wide critic: one entry per question that has issues.
+// Blueprint-wide critic: one entry per question that has issues. Also runs a
+// cross-question pass for non-discriminating keywords (a keyword reused across
+// many required points can't separate a strong answer from a weak one).
 export function critiqueBlueprint(functionalBlueprint) {
-  return (functionalBlueprint.topics || []).flatMap((t) =>
-    t.questions.map((q) => ({ questionId: q.id, prompt: q.prompt, topicName: t.name, issues: critiqueRubric(q) })),
-  ).filter((entry) => entry.issues.length);
+  const entries = (functionalBlueprint.topics || []).flatMap((t) =>
+    t.questions.map((q) => ({ q, questionId: q.id, prompt: q.prompt, topicName: t.name, issues: critiqueRubric(q) })));
+  const kwCount = new Map();
+  let pointTotal = 0;
+  entries.forEach(({ q }) => arr(q.rubric?.requiredPoints).forEach((p) => {
+    pointTotal += 1;
+    new Set(arr(p.keywords).map((k) => k.toLowerCase()).filter(Boolean)).forEach((k) => kwCount.set(k, (kwCount.get(k) || 0) + 1));
+  }));
+  const overUsed = new Set(pointTotal >= 4 ? [...kwCount.entries()].filter(([, c]) => c / pointTotal > 0.5).map(([k]) => k) : []);
+  if (overUsed.size) {
+    entries.forEach((entry) => {
+      const generic = new Set();
+      arr(entry.q.rubric?.requiredPoints).forEach((p) => arr(p.keywords).forEach((k) => { if (overUsed.has(k.toLowerCase())) generic.add(k.toLowerCase()); }));
+      if (generic.size) entry.issues.push({ level: 'info', kind: 'point', message: `Keyword(s) “${[...generic].join(', ')}” recur across many questions — too generic to discriminate; add a more specific term.` });
+    });
+  }
+  return entries.map(({ questionId, prompt, topicName, issues }) => ({ questionId, prompt, topicName, issues })).filter((e) => e.issues.length);
 }
 
 // ── Anti-leakage: flag "too googleable" recall/definition questions ──────────
@@ -246,7 +303,15 @@ function jdContext(job) {
   ].filter(Boolean).join('\n\n');
 }
 
-const RUBRIC_SHAPE = `"rubric":{"requiredPoints":[{"description":"...","keywords":["..."],"weight":1-3}],"secondaryPoints":[{"description":"...","keywords":["..."],"weight":1}],"excellentAnswerSignals":["..."],"redFlags":[{"description":"...","severity":"low|medium|high|critical"}]}`;
+const RUBRIC_SHAPE = `"rubric":{"requiredPoints":[{"description":"...","keywords":["lowercase terms the evaluator matches"],"weight":1-3,"pointType":"${POINT_TYPES.join('|')}","partialCredit":"what earns partial (not full) credit","antiPatterns":["a confused/incorrect claim that must NOT score"]}],"secondaryPoints":[{"description":"...","keywords":["..."],"weight":1}],"excellentAnswerSignals":[{"description":"an above-bar signal separating great from good","keywords":["..."],"weight":1}],"redFlags":[{"description":"...","severity":"low|medium|high|critical"}]}`;
+
+// Difficulty shapes what a rubric should demand — an Easy question shouldn't get
+// a Hard-question rubric, and a Hard question shouldn't get a thin one.
+const ENRICH_BY_DIFFICULTY = {
+  Easy: 'EASY: 1-2 requiredPoints, a concrete/closed expected answer, a 1-2 sentence model answer. Do NOT demand trade-off or edge-case reasoning.',
+  Medium: 'MEDIUM: 2-3 requiredPoints; a 3-4 sentence model answer referencing one concrete example or mechanism; at least one point should reward reasoning (pointType "example" or "procedure").',
+  Hard: 'HARD: 3-4 requiredPoints; a multi-sentence model answer; REQUIRE one point with pointType "tradeoff" (names competing considerations) and one with pointType "constraint" (failure modes / edge cases); weight the reasoning points highest.',
+};
 
 // Generation is TWO-PHASE: the DeepSeek proxy caps output at 3000 tokens, and a
 // full blueprint with rubrics overflows and truncates mid-JSON (verified). So
@@ -256,28 +321,35 @@ const RUBRIC_SHAPE = `"rubric":{"requiredPoints":[{"description":"...","keywords
 function buildOutlineMessages(job, opts = {}) {
   const topicCount = opts.topicCount || 4;
   const perTopic = opts.questionsPerTopic || 2;
+  const requirements = dedupeReqs(opts.requirements);
+  const reqBlock = requirements.length
+    ? `\n\nRequired competencies — cover EVERY one with at least one question and set that question's "targetRequirement" to the competency text VERBATIM:\n${requirements.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+    : '';
   const system = `You are a senior interviewer and assessment designer. Author the OUTLINE of a FUNCTIONAL (deep, role-specific) interview an AI avatar will conduct by VOICE.
 
 Return ONLY JSON (no markdown), shape:
-{"topics":[{"name":"...","type":"Theoretical|Experiential","difficulty":"Easy|Medium|Hard","questions":[{"prompt":"...","questionType":"${QUESTION_TYPES.join('|')}","difficulty":"Easy|Medium|Hard","estimatedMinutes":3-6,"competency":"which requirement this tests"}]}]}
+{"topics":[{"name":"...","type":"Theoretical|Experiential","difficulty":"Easy|Medium|Hard","questions":[{"prompt":"...","questionType":"${QUESTION_TYPES.join('|')}","difficulty":"Easy|Medium|Hard","estimatedMinutes":3-6,"competency":"which capability this tests","targetRequirement":"the exact required competency this maps to, or empty"}]}]}
 
 Rules:
-- ${topicCount} topics, ~${perTopic} questions each, mapped to the job's real requirements.
-- prompt: ONE idea, conversational, speakable aloud — no compound multi-part questions.
+- ~${topicCount} topics, ~${perTopic} questions each. Every required competency listed below MUST be tested by at least one question.
+- targetRequirement: copy the matching competency VERBATIM from the numbered list; use "" only for an extra depth question that maps to none.
+- prompt: ONE idea, conversational, speakable aloud — no compound multi-part questions; prefer an applied scenario over a definition.
 - OUTLINE ONLY — do NOT include model answers or rubrics here.
-- No preamble, no trailing commentary.`;
+- No preamble, no trailing commentary.${reqBlock}`;
   return [{ role: 'system', content: system }, { role: 'user', content: `Outline the functional interview for:\n\n${jdContext(job)}` }];
 }
 
 function buildEnrichMessages(job, q, topicName) {
-  const system = `You write the grading rubric an AI evaluator uses to score ONE spoken interview answer. Be concrete and discriminating.
+  const tier = ENRICH_BY_DIFFICULTY[q.difficulty] || ENRICH_BY_DIFFICULTY.Medium;
+  const system = `You write the grading rubric an AI evaluator uses to score ONE spoken interview answer. Be concrete and discriminating — the keywords and partialCredit must let an evaluator tell a real answer from a bluffed one.
 
 Return ONLY JSON (no markdown), shape:
-{"modelAnswer":"what a strong answer covers, 2-3 sentences",${RUBRIC_SHAPE},"followUpIntent":"when/how the avatar should probe deeper"}
+{"modelAnswer":"what a strong answer covers",${RUBRIC_SHAPE},"followUpIntent":"when/how the avatar should probe deeper"}
 
 Rules:
-- requiredPoints: 2-4, each with 2-5 lowercase keywords the evaluator matches on, weight 1-3 by importance.
-- redFlags: 1-2 realistic failure signals.
+- Calibrate to difficulty — ${tier}
+- Each requiredPoint: 2-5 lowercase keywords, weight 1-3, a pointType, and a partialCredit note; add antiPatterns when a plausible-sounding wrong answer exists.
+- redFlags: 1-2 realistic failure signals. excellentAnswerSignals: 1-2 above-bar signals as objects (not bare strings).
 - No preamble.`;
   const user = `Role: ${clean(job.roleName) || clean(job.cardName) || 'the role'}${job.experienceBand ? ` (${job.experienceBand})` : ''}
 Topic: ${topicName}
@@ -292,11 +364,12 @@ function buildScreeningMessages(job, opts = {}) {
   const system = `You are a recruiter running a short SCREENING call an AI avatar conducts by VOICE. Goal: gate fit, not deep evaluation — background, motivation, logistics (compensation, notice, location), and one role-relevant probe.
 
 Return ONLY JSON (no markdown), shape:
-{"questions":[{"prompt":"...","questionType":"hr_screening","difficulty":"Easy","competency":"what this confirms","modelAnswer":"what an acceptable answer sounds like","followUpIntent":"what to clarify if the answer is vague"}]}
+{"questions":[{"prompt":"...","questionType":"hr_screening","difficulty":"Easy","competency":"what this confirms","modelAnswer":"what an acceptable answer sounds like","rubric":{"requiredPoints":[{"description":"what an acceptable answer must convey","keywords":["..."],"weight":2}],"redFlags":[{"description":"a disqualifying answer","severity":"medium"}]},"followUpIntent":"what to clarify if the answer is vague"}]}
 
 Rules:
 - Exactly ${count} questions, short and warm, speakable aloud.
 - Cover background/motivation and the logistics the role cares about${categories.length ? `: ${categories.join(', ')}` : ''}.
+- Each question carries a LIGHT rubric: 1-2 requiredPoints (what an acceptable answer conveys, with lowercase keywords) + 0-1 redFlag, so screening answers are scored, not pass/fail.
 - No technical depth — that is the functional round's job.`;
   const user = `Author the screening questions for:\n\n${jdContext(job)}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
@@ -328,6 +401,41 @@ export function normalizeRubricPayload(parsed) {
 export async function generateScreeningQuestions(job, opts = {}) {
   const parsed = await callJson(buildScreeningMessages(job, opts));
   return normalizeScreeningBlueprint(parsed);
+}
+
+// ── Requirement analysis (the controlled vocabulary questions pin to) ─────────
+// The recruiter's must-haves ARE the requirements when present; when they are
+// thin we decompose the JD with the LLM, falling back to good-to-haves / role
+// archetype so the controlled list is never empty.
+function buildRequirementMessages(job) {
+  const system = `You are a hiring analyst. From the job description, extract the concrete, assessable competencies a FUNCTIONAL interview must test.
+
+Return ONLY JSON (no markdown): {"requirements":["short competency phrase", ...]}
+Rules:
+- 5-7 items, each a short noun phrase (e.g. "Distributed systems design", "Stakeholder management") — NOT a sentence.
+- Specific and testable; skip soft fluff unless the role genuinely hinges on it.
+- No preamble.`;
+  return [{ role: 'system', content: system }, { role: 'user', content: jdContext(job) }];
+}
+
+function localRequirements(job) {
+  const good = dedupeReqs(arr(job.resumeCriteria?.goodToHave));
+  if (good.length) return good;
+  const a = roleArchetype(job);
+  if (a === 'engineering') return ['System design', 'Code quality', 'Debugging', 'Collaboration'];
+  if (a === 'product') return ['Product sense', 'Metrics & analytics', 'Prioritization', 'Stakeholder leadership'];
+  return ['Core competency', 'Problem solving', 'Communication'];
+}
+
+export async function analyzeRequirements(job) {
+  const must = dedupeReqs(arr(job.resumeCriteria?.mustHave));
+  if (must.length >= 3) return must.slice(0, 10);
+  try {
+    const parsed = await callJson(buildRequirementMessages(job));
+    const llm = arr(parsed?.requirements).map(clean).filter(Boolean);
+    if (llm.length) return dedupeReqs([...must, ...llm]).slice(0, 10);
+  } catch { /* fall through to local */ }
+  return dedupeReqs([...must, ...localRequirements(job)]).slice(0, 10);
 }
 
 // ── Gap → question: author one rubric-bearing question for an untested must-have
@@ -409,16 +517,93 @@ export function normalizeScreeningBlueprint(parsed) {
 }
 
 // ── Coverage map: which JD requirements the blueprint actually tests ─────────
+// v2: prefer the EXPLICIT targetRequirement pin (set at generation/pin time) so
+// coverage is a real link, not a lexical guess. Word-overlap stays only as a
+// fallback for legacy/un-pinned blueprints.
+// Normalize a requirement string for matching: lowercase, strip punctuation,
+// collapse whitespace — so an LLM "verbatim" copy with a stray period/space
+// ("Strong SQL skills." ) still matches the controlled requirement.
+const normReq = (s) => clean(s).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 export function computeCoverage(job, functionalBlueprint) {
-  const must = arr(job.resumeCriteria?.mustHave);
-  const haystacks = (functionalBlueprint.topics || []).flatMap((t) =>
-    t.questions.map((q) => `${t.name} ${q.prompt} ${q.competency} ${q.rubric.requiredPoints.map((p) => `${p.description} ${p.keywords.join(' ')}`).join(' ')}`.toLowerCase()));
+  const questions = (functionalBlueprint.topics || []).flatMap((t) => t.questions);
+  // Cover against the recruiter's must-haves when present; otherwise against the
+  // distinct requirements generation pinned to (these live on each question's
+  // targetRequirement, so they survive a reload) — so the coverage panel isn't
+  // blank for JD-only / good-to-have-only jobs.
+  const mustHave = arr(job.resumeCriteria?.mustHave);
+  let must = mustHave;
+  if (!must.length) {
+    const seen = new Map();
+    questions.forEach((q) => { const t = clean(q.targetRequirement); if (t) seen.set(normReq(t), t); });
+    must = [...seen.values()];
+  }
+  const hayOf = (q) => `${q.competency} ${q.prompt} ${q.rubric.requiredPoints.map((p) => `${p.description} ${p.keywords.join(' ')}`).join(' ')}`.toLowerCase();
   return must.map((req) => {
+    const pinned = questions.filter((q) => normReq(q.targetRequirement) === normReq(req)).length;
+    if (pinned > 0) return { requirement: req, count: pinned, status: 'ok', pinned: true };
     const words = req.toLowerCase().split(/\s+/).filter((w) => w.length > 4 &&
       !['experience', 'knowledge', 'proficiency', 'familiarity', 'equivalent', 'similar'].includes(w));
-    const hits = haystacks.filter((h) => words.some((w) => h.includes(w))).length;
-    return { requirement: req, count: hits, status: hits >= 2 ? 'ok' : hits === 1 ? 'thin' : 'gap' };
+    const hits = questions.filter((q) => words.some((w) => hayOf(q).includes(w))).length;
+    return { requirement: req, count: hits, status: hits >= 2 ? 'ok' : hits === 1 ? 'thin' : 'gap', pinned: false };
   });
+}
+
+// Best-effort requirement match for a question, by keyword overlap of the
+// requirement against the question's competency + prompt. Returns '' if none.
+function matchRequirement(haystack, requirements) {
+  const h = clean(haystack).toLowerCase();
+  let best = '', bestScore = 0;
+  for (const req of requirements) {
+    const kws = requirementKeywords(req);
+    if (!kws.length) continue;
+    const score = kws.filter((w) => h.includes(w)).length;
+    if (score > bestScore) { bestScore = score; best = req; }
+  }
+  return bestScore >= 1 ? best : '';
+}
+
+// Pin every question to one of the controlled requirements (keep an exact match,
+// else best keyword match), then guarantee coverage by appending a local gap
+// question for any requirement no question pins. Mutates + returns the blueprint.
+export function pinBlueprintToRequirements(job, functionalBlueprint, requirements) {
+  const reqs = dedupeReqs(requirements);
+  if (!reqs.length || !functionalBlueprint || !Array.isArray(functionalBlueprint.topics)) return functionalBlueprint;
+  const byNorm = new Map(reqs.map((r) => [normReq(r), r]));
+  functionalBlueprint.topics.forEach((t) => {
+    t.questions.forEach((q) => {
+      const exact = byNorm.get(normReq(q.targetRequirement));
+      if (exact) { q.targetRequirement = exact; return; }
+      const match = matchRequirement(`${q.competency} ${q.prompt}`, reqs);
+      if (match) q.targetRequirement = match;
+    });
+  });
+  const pinned = new Set();
+  functionalBlueprint.topics.forEach((t) => t.questions.forEach((q) => { if (q.targetRequirement) pinned.add(normReq(q.targetRequirement)); }));
+  const uncovered = reqs.filter((r) => !pinned.has(normReq(r)));
+  if (uncovered.length) {
+    let gapTopic = functionalBlueprint.topics.find((t) => t.name === 'Coverage gaps');
+    if (!gapTopic) { gapTopic = createTopic({ name: 'Coverage gaps', type: 'Experiential', difficulty: 'Medium', questions: [] }); functionalBlueprint.topics.push(gapTopic); }
+    uncovered.forEach((req) => {
+      const q = localGapQuestion(job, req);
+      q.targetRequirement = req;
+      gapTopic.questions.push(q);
+    });
+  }
+  return functionalBlueprint;
+}
+
+// Scale the blueprint's size to the role's complexity (must-have count + JD
+// length) instead of a fixed 4×2, and surface the controlled requirement list.
+export function computeGenerationPlan(job) {
+  const requirements = dedupeReqs(arr(job.resumeCriteria?.mustHave));
+  const words = clean(job.description).split(/\s+/).filter(Boolean).length;
+  const score = requirements.length + (words > 600 ? 2 : words > 250 ? 1 : 0);
+  let complexity = 'low', topicCount = 3;
+  const questionsPerTopic = 2;
+  if (score >= 8) { complexity = 'high'; topicCount = 5; }
+  else if (score >= 4) { complexity = 'medium'; topicCount = 4; }
+  if (requirements.length) topicCount = Math.min(6, Math.max(topicCount, Math.ceil(requirements.length / questionsPerTopic)));
+  return { requirements, topicCount, questionsPerTopic, complexity };
 }
 
 // ── Calibration: glanceable stats for the top strip + inspector ──────────────
@@ -487,16 +672,33 @@ export function computeBandFit(job, functionalBlueprint) {
 }
 
 // ── Contract serialization (the portability layer to Krishna's backend) ──────
-// Exactly the JSON string the Prisma Question.aiEvaluationGuidance field +
-// evaluation service consume.
+// The JSON string the Prisma Question.aiEvaluationGuidance field + evaluation
+// service consume. v2 envelope: a stable blueprintQuestionId (the upsert key
+// that lets a question be edited without orphaning its DB row + history), plus
+// the previously-dropped competency / targetRequirement (JD traceability) and
+// followUpIntent (avatar/director probe). The eval parser destructures only
+// the keys it knows, so extra keys are backward-compatible.
+export const GUIDANCE_SCHEMA_VERSION = 'v2';
+function serializeRubricPoint(p) {
+  const out = { id: p.id, description: p.description, keywords: p.keywords, weight: p.weight };
+  if (p.pointType) out.pointType = p.pointType;
+  if (p.partialCredit) out.partialCredit = p.partialCredit;
+  if (arr(p.antiPatterns).length) out.antiPatterns = p.antiPatterns;
+  return out;
+}
 export function toAiEvaluationGuidance(qb) {
   return JSON.stringify({
+    schemaVersion: GUIDANCE_SCHEMA_VERSION,
+    blueprintQuestionId: qb.id,
     questionType: qb.questionType,
+    competency: qb.competency,
+    targetRequirement: qb.targetRequirement || '',
+    followUpIntent: qb.followUpIntent,
     modelAnswer: qb.modelAnswer,
     rubric: {
-      requiredPoints: qb.rubric.requiredPoints.map((p) => ({ id: p.id, description: p.description, keywords: p.keywords, weight: p.weight })),
-      secondaryPoints: qb.rubric.secondaryPoints.map((p) => ({ id: p.id, description: p.description, keywords: p.keywords, weight: p.weight })),
-      excellentAnswerSignals: qb.rubric.excellentAnswerSignals,
+      requiredPoints: qb.rubric.requiredPoints.map(serializeRubricPoint),
+      secondaryPoints: qb.rubric.secondaryPoints.map(serializeRubricPoint),
+      excellentAnswerSignals: qb.rubric.excellentAnswerSignals.map(serializeRubricPoint),
       redFlags: qb.rubric.redFlags.map((f) => ({ id: f.id, description: f.description, severity: f.severity })),
     },
   });
@@ -514,6 +716,7 @@ export function toFunctionalParameters(functionalBlueprint) {
       difficulty: t.difficulty,
       questions: t.questions.map((q) => q.prompt),
       questionsDetailed: t.questions.map((q) => ({
+        id: q.id,
         text: q.prompt,
         questionType: q.questionType,
         difficulty: q.difficulty,

@@ -7,7 +7,7 @@
 // camelCase model so neither side has to change shape (Vansh's model leads —
 // see memory: prefer-vansh-version).
 
-import { createTopic, createQuestionBlueprint } from './blueprint-engine.js';
+import { createTopic, createQuestionBlueprint, toFunctionalParameters, toScreeningQuestions } from './blueprint-engine.js';
 
 const LS_SOURCE = 'IntervieHire_data_source';
 const LS_TOKEN = 'IntervieHire_auth_token';
@@ -15,6 +15,11 @@ const LS_TOKEN = 'IntervieHire_auth_token';
 // Base URL: env override (NEXT_PUBLIC_API_URL) → default local FastAPI.
 const API_BASE = (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_API_URL)
   || 'http://localhost:8000/api';
+
+// The candidate interview room (ai_components/apps/web). apps/web hardcodes
+// `next dev -p 3000` which collides with the dashboard, so it is run on 3001.
+export const ENGINE_WEB_URL = (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_ENGINE_WEB_URL)
+  || 'http://localhost:3001';
 
 export function getDataSource() {
   try { return localStorage.getItem(LS_SOURCE) === 'api' ? 'api' : 'local'; } catch { return 'local'; }
@@ -83,6 +88,12 @@ export async function apiFetchCandidateReport(applicantId) {
   const data = await request(`/jobs/applicants/${applicantId}/functional-report`);
   return mapFullReportToCandidateReport(data);
 }
+// Dev launcher: create a throwaway test interview from the job's blueprint and
+// return its session id (= the test applicant id) for the candidate room.
+export async function apiCreateTestSession(jobId) {
+  const data = await request(`/jobs/${jobId}/test-session`, { method: 'POST' });
+  return data?.session_id || null;
+}
 
 // ── Mappers: backend (snake_case) ⇄ dashboard (camelCase) ──────────────────
 const arr = (v) => (Array.isArray(v) ? v : []);
@@ -144,8 +155,13 @@ function mapFunctionalIn(fp) {
         let guidance = {};
         try { guidance = q.aiEvaluationGuidance ? JSON.parse(q.aiEvaluationGuidance) : {}; } catch { guidance = {}; }
         return createQuestionBlueprint({
+          // Preserve the stable id across the round-trip so edits map back to
+          // the same backend Question row instead of minting a fresh id.
+          id: q.id || guidance.blueprintQuestionId,
           prompt: q.text || q.prompt, questionType: q.questionType || guidance.questionType,
           difficulty: q.difficulty, estimatedMinutes: q.estimatedMinutes,
+          competency: guidance.competency, targetRequirement: guidance.targetRequirement,
+          followUpIntent: guidance.followUpIntent,
           modelAnswer: guidance.modelAnswer, rubric: guidance.rubric,
         });
       }),
@@ -153,33 +169,18 @@ function mapFunctionalIn(fp) {
   };
 }
 
-// Dashboard job → backend JobParametersIn. Reuses the engine's contract
-// serializers so the wire shape matches ai_sync.py exactly.
+// Dashboard job → backend JobParametersIn. Delegates to the engine's contract
+// serializers (toFunctionalParameters / toScreeningQuestions) so there is ONE
+// source of truth for the wire shape — the v2 aiEvaluationGuidance envelope
+// (stable blueprintQuestionId + competency/targetRequirement/followUpIntent)
+// flows automatically and can't drift from a duplicated serializer here.
 function mapJobToParametersPayload(job) {
   const fp = job.functionalParameters || { topics: [] };
   const sb = job.screeningBlueprint || { questions: [] };
   const rc = job.resumeCriteria || {};
   return {
-    screening_questions: arr(sb.questions).map((q) => q.prompt),
-    functional_parameters: {
-      topics: arr(fp.topics).map((t) => ({
-        name: t.name, type: t.type, difficulty: t.difficulty,
-        questions: arr(t.questions).map((q) => q.prompt),
-        questionsDetailed: arr(t.questions).map((q) => ({
-          text: q.prompt, questionType: q.questionType, difficulty: q.difficulty,
-          estimatedMinutes: q.estimatedMinutes,
-          aiEvaluationGuidance: JSON.stringify({
-            questionType: q.questionType, modelAnswer: q.modelAnswer,
-            rubric: {
-              requiredPoints: (q.rubric?.requiredPoints || []).map((p) => ({ id: p.id, description: p.description, keywords: p.keywords, weight: p.weight })),
-              secondaryPoints: (q.rubric?.secondaryPoints || []).map((p) => ({ id: p.id, description: p.description, keywords: p.keywords, weight: p.weight })),
-              excellentAnswerSignals: q.rubric?.excellentAnswerSignals || [],
-              redFlags: (q.rubric?.redFlags || []).map((f) => ({ id: f.id, description: f.description, severity: f.severity })),
-            },
-          }),
-        })),
-      })),
-    },
+    screening_questions: toScreeningQuestions(sb),
+    functional_parameters: toFunctionalParameters(fp),
     resume_parameters: { must_have: arr(rc.mustHave), red_flags: arr(rc.redFlags), good_to_have: arr(rc.goodToHave) },
   };
 }

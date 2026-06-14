@@ -53,10 +53,21 @@ router = APIRouter()
 UPLOAD_DIR = "uploads/jd"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Throwaway "Launch test interview" candidates are tagged with this sentinel in
+# `remarks` so they never surface in the recruiter funnel, roster, or analytics.
+TEST_SESSION_REMARK = "__ih_test_session__"
+
+
+def _is_test_applicant(a: Applicant) -> bool:
+    return (a.remarks or "") == TEST_SESSION_REMARK
+
 
 def _build_job_out(job: Job, db: Session) -> dict:
     """Helper to build JobOut with pipeline counts."""
-    applicants = db.query(Applicant).filter(Applicant.job_id == job.id).all()
+    applicants = [
+        a for a in db.query(Applicant).filter(Applicant.job_id == job.id).all()
+        if not _is_test_applicant(a)
+    ]
     import json
     tags = []
     if job.tags:
@@ -1346,6 +1357,57 @@ def update_job_parameters(
     return _build_job_detail_out(job)
 
 
+# ─── TEST INTERVIEW (dev launcher) ────────────────────────────────────────────
+
+@router.post("/{job_id}/test-session")
+def create_test_session(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    active_org_id: Optional[UUID] = Depends(get_active_org_id),
+    db: Session = Depends(get_db)
+):
+    """Spin up a throwaway functional interview from this job's blueprint so the
+    recruiter can run it end-to-end while developing. Reuses one tagged test
+    candidate per job (excluded from funnel/analytics via TEST_SESSION_REMARK)
+    and resets its InterviewSession to SCHEDULED-now so the candidate room can
+    start immediately without waiting on a scheduled slot. The session id is the
+    applicant id (matching sync_applicant_to_ai). Returns {session_id}."""
+    from datetime import datetime, timedelta, timezone
+    from app.utils.ai_sync import sync_applicant_to_ai
+
+    job = _verify_job_access(job_id, current_user, active_org_id, db)
+
+    test_applicant = db.query(Applicant).filter(
+        Applicant.job_id == job_id,
+        Applicant.remarks == TEST_SESSION_REMARK
+    ).first()
+    if not test_applicant:
+        test_applicant = Applicant(
+            job_id=job_id,
+            name="Test Candidate",
+            email=f"test-session+{job_id}@interviehire.local",
+            source=ApplicantSource.direct_link,
+            remarks=TEST_SESSION_REMARK,
+        )
+        db.add(test_applicant)
+
+    # Schedule a minute in the past so the engine never treats it as locked/early.
+    now = datetime.now(timezone.utc) - timedelta(minutes=1)
+    test_applicant.functional_status = InterviewStatus.scheduled
+    test_applicant.functional_scheduled_at = now
+    db.commit()
+    db.refresh(test_applicant)
+
+    session = sync_applicant_to_ai(db, test_applicant)
+    if not session:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not create a test interview from this job's blueprint. Make sure the job has functional questions authored."
+        )
+
+    return {"session_id": str(test_applicant.id)}
+
+
 
 # ─── RESPONSES (candidates for a job) ────────────────────────────────────────
 
@@ -1394,7 +1456,10 @@ def get_responses(
 ):
     job = _verify_job_access(job_id, current_user, active_org_id, db)
 
-    applicants = db.query(Applicant).filter(Applicant.job_id == job_id).all()
+    applicants = [
+        a for a in db.query(Applicant).filter(Applicant.job_id == job_id).all()
+        if not _is_test_applicant(a)
+    ]
     _reconcile_functional_from_sessions(db, applicants)
 
     if tab == "overview":

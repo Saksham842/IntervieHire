@@ -35,7 +35,7 @@ Candidate (Krishna interview runner) ──────┘            │  (jobs
 ## Canonical contracts (freeze these)
 
 - **Question authoring →** `job.screening_questions: string[]` + `job.functional_parameters: { topics:[{name,type,difficulty,questions:string[], questionsDetailed:[{text,questionType,difficulty,estimatedMinutes,aiEvaluationGuidance}]}] }`. The dashboard already emits exactly this (`blueprint-engine.toFunctionalParameters`).
-- **`aiEvaluationGuidance` (per question, stringified JSON):** `{questionType, modelAnswer, rubric:{requiredPoints[{id,description,keywords[],weight}], secondaryPoints[], excellentAnswerSignals: string[], redFlags[{id,description,severity}]}}`.
+- **`aiEvaluationGuidance` (per question, stringified JSON, v2 envelope):** `{schemaVersion:'v2', blueprintQuestionId, questionType, competency, targetRequirement, followUpIntent, modelAnswer, rubric:{requiredPoints[{id,description,keywords[],weight,pointType?,partialCredit?,antiPatterns?[]}], secondaryPoints[], excellentAnswerSignals[{id,description,keywords[],weight}], redFlags[{id,description,severity}]}}`. (`excellentAnswerSignals` is now an object array like `requiredPoints`, not `string[]`.)
 - **Evaluation output →** Aviral's `CandidateReport` (`evaluation/types.ts`). The dashboard Deep Analysis already renders this shape.
 
 ## End-to-end data flow (target)
@@ -56,7 +56,7 @@ Candidate (Krishna interview runner) ──────┘            │  (jobs
 
 ### B. Backend (`interviehire_dashboard`) — Krishna
 - `ai_sync.py`: read `functional_parameters.topics[].questionsDetailed[]` → populate `Question.aiEvaluationGuidance` from the authored rubric (don't regenerate); `.upper()` the `Easy|Medium|Hard` difficulty for the Prisma enum; add a `questionType` column to `Question`.
-- Node eval: replace the current evaluator with **Aviral's `evaluation/` pipeline**; emit Aviral's `CandidateReport`; have `normalizeRubricPoints` accept **string** `excellentAnswerSignals`.
+- Node eval: replace the current evaluator with **Aviral's `evaluation/` pipeline**; emit Aviral's `CandidateReport`. (`normalizeRubricPoints`/`mapPoints` now coerce legacy `string` rubric points to `{description}`, so both new object-shaped and old string `excellentAnswerSignals` parse.)
 - Persist the full `CandidateReport` (incl. `questionBreakdown`) on `InterviewSession.evaluation`; expose it via the vetting/report endpoint.
 - Normalize transcript → `{questionId, answerId, text, ts}` so per-question evaluation is reliable (today it's a flat array — the main gap).
 

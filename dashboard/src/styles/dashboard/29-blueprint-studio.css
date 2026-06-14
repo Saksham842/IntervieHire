@@ -100,8 +100,11 @@ body.light-theme .bs-btn-generate { color: #fff; }
 .bs-model { background: var(--color-surface-2); border: 1px solid var(--glass-border); border-left: 2px solid var(--color-gold); border-radius: 0 9px 9px 0; padding: 10px 12px; margin-bottom: 13px; }
 .bs-model-label { font-size: 0.62rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--color-gold); margin-bottom: 6px; }
 .bs-rg-label { font-size: 0.65rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--color-text-faint); margin: 12px 0 8px; display: flex; align-items: center; gap: 6px; }
-.bs-point { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.bs-point-wrap { margin-bottom: 9px; }
+.bs-point { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .bs-point-text { flex: 1; }
+.bs-point-kw { width: 100%; font-size: 11.5px; padding: 4px 8px; color: var(--color-gold-light); opacity: 0.88; }
+.bs-point-kw::placeholder { color: var(--color-text-faint); opacity: 0.7; }
 .bs-sev-select { width: 96px; flex-shrink: 0; cursor: pointer; font-family: var(--font-mono); font-size: 0.68rem; text-transform: capitalize; }
 .bs-weight { display: flex; gap: 3px; flex-shrink: 0; cursor: pointer; padding: 4px; }
 .bs-wdot { width: 7px; height: 15px; border-radius: 2px; background: rgba(255,255,255,.12); transition: var(--spring-fast); }
