@@ -41,7 +41,7 @@ const landingHtml = `
               <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
             </svg>
           </button>
-          <a href="/dashboard" class="btn btn-secondary" style="padding: 10px 20px; font-size: 0.9rem; margin-right: 8px;">Dashboard</a>
+          <a href="/login" class="btn btn-secondary" style="padding: 10px 20px; font-size: 0.9rem; margin-right: 8px;">Sign In</a>
           <a href="#contact" class="btn btn-primary" style="padding: 10px 20px; font-size: 0.9rem; background: var(--color-gold); color: #0A0A0A; border: none;">Book a Demo</a>
         </div>
       </div>

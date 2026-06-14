@@ -1,0 +1,60 @@
+// Standalone auth + HTTP client for the FastAPI backend. Intentionally free of
+// any dashboard-module imports so the lean /login and /signup pages (and the
+// dashboard guard) can reuse it without dragging in the dashboard graph — which
+// also avoids a circular-import break during prerender.
+//
+// Auth is an httponly `token` cookie set by the backend (samesite=lax reaches
+// :8000 because localhost ports are same-site). JS can't read it, so we keep a
+// local "signed in" flag for optimistic UI — the browser carries the cookie via
+// credentials:'include'.
+
+const LS_TOKEN = 'IntervieHire_auth_token';
+
+// Base URL: env override (NEXT_PUBLIC_API_URL) → default local FastAPI.
+export const API_BASE = (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_API_URL)
+  || 'http://localhost:8000/api';
+
+function setAuthed(v) { try { v ? localStorage.setItem(LS_TOKEN, '1') : localStorage.removeItem(LS_TOKEN); } catch {} }
+export const isAuthed = () => { try { return localStorage.getItem(LS_TOKEN) === '1'; } catch { return false; } };
+// Lets the guard clear the optimistic flag when /me rejects.
+export function clearAuthed() { setAuthed(false); }
+
+export async function request(path, { method = 'GET', body } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { method, headers, credentials: 'include', body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+  } catch (err) {
+    throw new Error(`Network error reaching backend (${API_BASE}). Is FastAPI running on :8000? ${err.message}`);
+  }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) {
+    const msg = (data && (data.detail || data.error || data.message)) || `${res.status} ${res.statusText}`;
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+
+export async function apiLogin(email, password) {
+  const data = await request('/auth/login', { method: 'POST', body: { email, password } });
+  setAuthed(true);
+  return { user: data?.user || null, onboardingRequired: !!data?.onboarding_required };
+}
+
+export async function apiSignup({ name, email, password }) {
+  const data = await request('/auth/signup', { method: 'POST', body: { name, email, password } });
+  setAuthed(true);
+  return { user: data?.user || null, onboardingRequired: !!data?.onboarding_required };
+}
+
+// Authoritative session check — returns the user profile, or throws on 401.
+export async function apiMe() {
+  return request('/auth/me');
+}
+
+export async function apiLogout() {
+  try { await request('/auth/logout', { method: 'POST' }); } catch {}
+  setAuthed(false);
+}

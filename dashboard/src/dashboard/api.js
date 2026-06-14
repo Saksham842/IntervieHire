@@ -8,13 +8,13 @@
 // see memory: prefer-vansh-version).
 
 import { createTopic, createQuestionBlueprint, toFunctionalParameters, toScreeningQuestions } from './blueprint-engine.js';
+import { request, apiLogin, apiSignup, apiMe, apiLogout, isAuthed, clearAuthed } from '../auth-client.js';
+
+// Auth + HTTP primitives live in ../auth-client.js (dependency-free so the lean
+// /login + /signup pages can reuse them). Re-export for existing callers here.
+export { apiLogin, apiSignup, apiMe, apiLogout, isAuthed, clearAuthed };
 
 const LS_SOURCE = 'IntervieHire_data_source';
-const LS_TOKEN = 'IntervieHire_auth_token';
-
-// Base URL: env override (NEXT_PUBLIC_API_URL) → default local FastAPI.
-const API_BASE = (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_API_URL)
-  || 'http://localhost:8000/api';
 
 // The candidate interview room (ai_components/apps/web). apps/web hardcodes
 // `next dev -p 3000` which collides with the dashboard, so it is run on 3001.
@@ -28,39 +28,6 @@ export function setDataSource(mode) {
   try { localStorage.setItem(LS_SOURCE, mode === 'api' ? 'api' : 'local'); } catch {}
 }
 export const isApiMode = () => getDataSource() === 'api';
-
-// Auth is an httponly `token` cookie set by the backend (samesite=lax; reaches
-// :8000 because localhost ports are same-site). JS can't read it, so we only
-// track a local "signed in" flag for UI — the browser carries the cookie via
-// credentials:'include'.
-function setAuthed(v) { try { v ? localStorage.setItem(LS_TOKEN, '1') : localStorage.removeItem(LS_TOKEN); } catch {} }
-
-async function request(path, { method = 'GET', body } = {}) {
-  const headers = { 'Content-Type': 'application/json' };
-  let res;
-  try {
-    res = await fetch(`${API_BASE}${path}`, { method, headers, credentials: 'include', body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
-  } catch (err) {
-    throw new Error(`Network error reaching backend (${API_BASE}). Is FastAPI running on :8000? ${err.message}`);
-  }
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!res.ok) {
-    const msg = (data && (data.detail || data.error || data.message)) || `${res.status} ${res.statusText}`;
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-  }
-  return data;
-}
-
-// ── Auth ─────────────────────────────────────────────────────────────────
-export async function apiLogin(email, password) {
-  const data = await request('/auth/login', { method: 'POST', body: { email, password } });
-  setAuthed(true);
-  return { user: data?.user || null, onboardingRequired: !!data?.onboarding_required };
-}
-export async function apiLogout() { try { await request('/auth/logout', { method: 'POST' }); } catch {} setAuthed(false); }
-export const isAuthed = () => { try { return localStorage.getItem(LS_TOKEN) === '1'; } catch { return false; } };
 
 // ── Jobs ─────────────────────────────────────────────────────────────────
 export async function apiFetchJobs() {

@@ -67,6 +67,16 @@ npm run dev
 ```
 The dashboard runs on localStorage by default. Flip it to the live backend with `IHApi.setDataSource('api')` in the browser console (it then hydrates jobs, persists authored blueprints, and renders live reports in Deep Analysis).
 
+## Authentication
+
+The dashboard is gated by a login. Auth is the existing **FastAPI backend** (`backend/app/routers/auth.py`) over the shared Supabase/Postgres database — **email + password**, bcrypt-hashed, with a 7-day JWT in an httpOnly cookie.
+
+- **Sign in:** `/login` (email + password). **Sign up:** `/signup` (name + email + password) — new recruiters become an org admin of a fresh workspace.
+- **Admin:** the seeded `super_admin` is `admin@interviehire.com` (password set by your team's seed).
+- **Flow:** `/dashboard` is guarded and redirects to `/login` when there's no valid session. The sidebar profile shows the signed-in user; the logout button ends the session and returns to `/login`.
+
+Because the dashboard calls the backend directly, **auth requires the FastAPI backend running** (`:8000`) with a reachable `DATABASE_URL`. Point the dashboard at the API with `NEXT_PUBLIC_API_URL`. For a cross-site production deploy, the backend's auth cookie must be sent cross-site (`SameSite=None; Secure`).
+
 ## Notes
 
 - **Secrets** live only in `.env` files, which are gitignored. Never commit real keys or database URLs.
