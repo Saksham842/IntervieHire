@@ -1,0 +1,26 @@
+# Render blueprint for the intervieHire FastAPI backend.
+# Deploy: Render Dashboard → New → Blueprint → pick this repo. Render reads this
+# file, then prompts for the two `sync: false` secrets (DATABASE_URL, FRONTEND_URL).
+services:
+  - type: web
+    name: interviehire-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /
+    envVars:
+      # Pin to 3.12 — 3.13/3.14 lack wheels for some deps.
+      - key: PYTHON_VERSION
+        value: "3.12.5"
+      # Auto-generated strong secret for JWT signing.
+      - key: SECRET_KEY
+        generateValue: true
+      # Shared Supabase pooler URL — paste when prompted (keep it secret).
+      - key: DATABASE_URL
+        sync: false
+      # The dashboard's public origin (your Vercel URL), e.g.
+      # https://interviehire-final.vercel.app — used for CORS.
+      - key: FRONTEND_URL
+        sync: false
