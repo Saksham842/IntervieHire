@@ -148,6 +148,11 @@ body.light-theme .bs-wdot { background: rgba(0,0,0,.10); }
 .bs-rev-issue.info { color: var(--color-text-faint); }
 .bs-rev-issue.info .bs-rev-dot { background: var(--color-text-faint); }
 
+.bs-leak { display: flex; align-items: center; gap: 9px; margin: 8px 0 2px; padding: 8px 11px; background: rgba(251,146,60,.08); border: 1px solid rgba(251,146,60,.25); border-radius: 10px; color: #fb923c; }
+.bs-leak svg { flex-shrink: 0; }
+.bs-leak-txt { flex: 1; font-size: 0.72rem; line-height: 1.4; color: var(--color-text-muted); }
+.bs-leak .bs-mini-btn { flex-shrink: 0; }
+
 .bs-preview { background: var(--color-gold-dim); border: 1px solid var(--glass-border); border-radius: 13px; padding: 13px; }
 .bs-av-row { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; }
 .bs-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--gradient-gold); display: flex; align-items: center; justify-content: center; color: #06201d; font-weight: 700; font-size: 0.85rem; box-shadow: 0 0 16px var(--color-gold-glow); }

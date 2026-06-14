@@ -13,9 +13,9 @@ import { isApiMode, apiPatchJobParameters } from './api.js';
 import {
   MODE_FUNCTIONAL, MODE_SCREENING, CONTRACT_DIFFICULTY, TOPIC_TYPES, QUESTION_TYPES, SEVERITY_LEVELS,
   migrateLegacyQuestions, emptyScreeningBlueprint, createTopic, createQuestionBlueprint, createRubricPoint, createRedFlag,
-  generateFunctionalOutline, enrichQuestionRubric, generateScreeningQuestions, generateGapQuestion,
-  localFunctionalBlueprint, localScreeningQuestions, localGapQuestion,
-  computeCoverage, computeCalibration, computeBandFit, rubricStrength, critiqueRubric, critiqueBlueprint,
+  generateFunctionalOutline, enrichQuestionRubric, generateScreeningQuestions, generateGapQuestion, generateScenarioVariant,
+  localFunctionalBlueprint, localScreeningQuestions, localGapQuestion, localScenarioVariant,
+  computeCoverage, computeCalibration, computeBandFit, rubricStrength, critiqueRubric, critiqueBlueprint, leakageRisk,
 } from './blueprint-engine.js';
 
 // Shared mutable UI state — imported bindings are read-only, so studio view
@@ -28,6 +28,7 @@ const studioUi = {
   expandedQuestionId: null,
   generating: false,
   draftingReq: null,
+  scenarioQid: null,
 };
 
 let dragState = null;
@@ -246,6 +247,13 @@ function reviewBadge(q) {
   return `<span class="bs-qchip" style="color:${c};border-color:${c}40;background:${c}14;" title="${n} rubric issue${n !== 1 ? 's' : ''} — open the Review tab"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ${n}</span>`;
 }
 
+function leakageBadge(q) {
+  const { risk } = leakageRisk(q);
+  if (risk === 'low') return '';
+  const c = risk === 'high' ? '#f87171' : '#fbbf24';
+  return `<span class="bs-qchip" style="color:${c};border-color:${c}40;background:${c}14;" title="Googleable — a memorised answer could game it. Open to rewrite as a scenario."><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> googleable</span>`;
+}
+
 function questionMarkup(q) {
   const open = studioUi.expandedQuestionId === q.id;
   const tt = tint(TYPE_TINT, q.questionType);
@@ -260,6 +268,7 @@ function questionMarkup(q) {
           <span class="bs-qchip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> ${q.estimatedMinutes} min</span>
           ${strengthBadge(q)}
           ${reviewBadge(q)}
+          ${leakageBadge(q)}
         </div>
       </div>
     </div>
@@ -272,6 +281,7 @@ function questionEditor(q) {
   return `
     <label class="bs-fld-label">Question prompt <span class="bs-faint">· spoken aloud by the avatar</span></label>
     <textarea class="bs-input bs-prompt" data-action="edit" data-q-id="${q.id}" data-field="prompt" rows="2" placeholder="One clear idea, conversational…">${escapeHTML(q.prompt)}</textarea>
+    ${(() => { const lk = leakageRisk(q); return lk.risk !== 'low' ? `<div class="bs-leak"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span class="bs-leak-txt">${escapeHTML(lk.reason)}</span><button class="bs-mini-btn" data-action="make-scenario" data-q-id="${q.id}" ${studioUi.generating ? 'disabled' : ''}>${studioUi.scenarioQid === q.id ? 'Rewriting…' : 'Make it a scenario'}</button></div>` : ''; })()}
 
     <div class="bs-meta-row">
       <select class="bs-input bs-select" data-action="edit" data-q-id="${q.id}" data-field="questionType">
@@ -451,6 +461,8 @@ function bindStudio(pane, job) {
         studioUi.inspectorTab = el.dataset.tab; reRender(); break;
       case 'draft-gap':
         await handleDraftGap(job, el.dataset.req, reRender); break;
+      case 'make-scenario':
+        await handleScenarioVariant(job, qid, reRender); break;
       case 'jump-question': {
         const fb = functionalOf(job);
         const topic = (fb.topics || []).find((t) => t.questions.some((q) => q.id === qid));
@@ -604,6 +616,41 @@ function deleteQuestion(job, qid) {
   const sb = screeningOf(job);
   const j = sb.questions.findIndex((q) => q.id === qid);
   if (j >= 0) sb.questions.splice(j, 1);
+}
+
+// Rewrite a googleable question in place as an applied scenario (keeps its id +
+// position so the canvas doesn't jump). AI-first, local fallback.
+async function handleScenarioVariant(job, qid, reRender) {
+  const { q } = findQuestion(job, qid);
+  if (!q || studioUi.generating) return;
+  studioUi.generating = true;
+  studioUi.scenarioQid = qid;
+  studioUi.genLabel = 'Rewriting as scenario…';
+  reRender();
+  soundEngine.playChime([392, 440], 0.1, 0.1);
+
+  let v;
+  let offline = false;
+  try { v = await generateScenarioVariant(job, q); }
+  catch { v = localScenarioVariant(q); offline = true; }
+
+  q.prompt = v.prompt;
+  q.questionType = v.questionType;
+  q.difficulty = v.difficulty;
+  q.estimatedMinutes = v.estimatedMinutes;
+  q.competency = v.competency;
+  q.modelAnswer = v.modelAnswer;
+  q.rubric = v.rubric;
+  q.followUpIntent = v.followUpIntent;
+
+  studioUi.generating = false;
+  studioUi.scenarioQid = null;
+  studioUi.genLabel = null;
+  studioUi.expandedQuestionId = q.id;
+  persist();
+  reRender();
+  showPremiumToast(offline ? 'Rewritten as a scenario offline.' : 'Rewritten as an applied scenario.', 'success');
+  soundEngine.playChime([523.25, 659.25, 783.99], 0.18, 0.07);
 }
 
 const GAP_TOPIC_NAME = 'Coverage gaps';

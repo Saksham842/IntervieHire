@@ -172,6 +172,28 @@ export function critiqueBlueprint(functionalBlueprint) {
   ).filter((entry) => entry.issues.length);
 }
 
+// ── Anti-leakage: flag "too googleable" recall/definition questions ──────────
+// A question whose answer is a canonical, memorisable definition lets a prepared
+// candidate score full marks without demonstrating real ability. Scenario/
+// experience questions force application, so they're inherently low-risk.
+const SCENARIO_TYPES = ['behavioral', 'case_study', 'system_design', 'sales_roleplay'];
+const SCENARIO_CUE = /\b(how would you|walk me through|tell me about a time|describe a (time|situation|project)|give me an example|given that|suppose|imagine|you (are|have|notice|find|inherit)|a (customer|user|teammate|stakeholder)|in production|real situation|step me through|how do you decide|trade-?off)\b/;
+const DEFINITION_LEAD = /^\s*(what is|what are|what's|whats|define|explain (what|the difference|the differences)|name the|list( the)?|what does|state the|mention the|when do you use)\b/;
+const DEFINITION_PHRASE = /\b(difference between|differences between|types of|kinds of|advantages of|disadvantages of|benefits of|features of|pros and cons|what do you mean by|stand for|definition of)\b/;
+
+export function leakageRisk(qb) {
+  const p = clean(qb.prompt).toLowerCase();
+  if (!p) return { risk: 'low', reason: '' };
+  if (SCENARIO_TYPES.includes(qb.questionType) || SCENARIO_CUE.test(p)) return { risk: 'low', reason: '' };
+  if (DEFINITION_LEAD.test(p) || DEFINITION_PHRASE.test(p)) {
+    return { risk: 'high', reason: 'Definition-style question — a memorised or searched answer scores full marks. Recast it as a scenario the candidate must reason through.' };
+  }
+  if (qb.questionType === 'technical_theory') {
+    return { risk: 'medium', reason: 'Recall-leaning — ground it in a concrete situation so memorised theory alone is not enough.' };
+  }
+  return { risk: 'low', reason: '' };
+}
+
 // ── Migration off the legacy flat `job.questions` ───────────────────────────
 // Groups legacy questions by type into topics, lifting the freeform `rubric`
 // sentence into a single required point and `follow_ups` into followUpIntent,
@@ -333,6 +355,37 @@ export async function generateGapQuestion(job, requirement) {
   const qb = createQuestionBlueprint({ ...parsed, competency: clean(parsed?.competency) || requirement });
   if (!qb.prompt) throw new Error('empty gap question');
   return qb;
+}
+
+// ── Scenario rewrite: turn a googleable question into an applied one ──────────
+function buildScenarioMessages(job, qb) {
+  const competency = clean(qb.competency) || clean(qb.prompt);
+  const system = `You rewrite an interview question so a memorised or googled textbook answer no longer scores. Turn it into a concrete SCENARIO that forces the candidate to APPLY the concept — same competency and difficulty, but they must reason about a specific situation, make a decision, and justify trade-offs.
+
+Return ONLY JSON (no markdown), shape:
+{"prompt":"...","questionType":"${QUESTION_TYPES.join('|')}","difficulty":"Easy|Medium|Hard","estimatedMinutes":3-6,"competency":"...","modelAnswer":"what a strong applied answer covers, 2-3 sentences",${RUBRIC_SHAPE},"followUpIntent":"when/how to probe deeper"}
+
+Rules:
+- Keep the SAME underlying competency: "${competency}".
+- prompt: a specific, realistic scenario, conversational, speakable aloud — applied, not definitional.
+- requiredPoints reward reasoning and judgment, not recall of a definition.
+- No preamble.`;
+  const user = `Role: ${clean(job.roleName) || clean(job.cardName) || 'the role'}${job.experienceBand ? ` (${job.experienceBand})` : ''}
+Original (too googleable) question: ${clean(qb.prompt)}
+Competency to keep testing: ${competency}
+Rewrite it as an applied scenario.`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+export async function generateScenarioVariant(job, qb) {
+  const parsed = await callJson(buildScenarioMessages(job, qb));
+  const nb = createQuestionBlueprint({
+    ...parsed,
+    difficulty: oneOf(parsed?.difficulty, CONTRACT_DIFFICULTY, qb.difficulty),
+    competency: clean(parsed?.competency) || qb.competency,
+  });
+  if (!nb.prompt) throw new Error('empty scenario variant');
+  return nb;
 }
 
 // ── Normalization (coerce any AI/legacy payload into the contract shape) ─────
@@ -622,4 +675,25 @@ export function localGapQuestion(job, requirement) {
     [[`Concrete first-hand example of ${req}`, kw.length ? kw : ['example'], 3], ['Specific role and a measurable outcome', ['my role', 'result'], 2]],
     [['Speaks only in generalities, gives no real example', 'medium']],
   );
+}
+
+// Keyless fallback for the scenario rewrite — recasts a googleable question as an
+// applied case study while preserving its competency and difficulty.
+export function localScenarioVariant(qb) {
+  const topic = clean(qb.competency) || 'the concept';
+  const kw = requirementKeywords(topic);
+  return createQuestionBlueprint({
+    prompt: `Walk me through a real situation where you had to apply ${topic}. What was the context, what did you decide, and why?`,
+    questionType: 'case_study',
+    difficulty: oneOf(qb.difficulty, CONTRACT_DIFFICULTY, 'Medium'),
+    competency: clean(qb.competency),
+    modelAnswer: `Describes a concrete situation, applies ${topic} to make a decision, and justifies the trade-offs — not a textbook definition.`,
+    rubric: {
+      requiredPoints: [
+        { description: `Applies ${topic} to a concrete situation`, keywords: kw.length ? kw : ['situation'], weight: 3 },
+        { description: 'Justifies the decision and trade-offs', keywords: ['because', 'trade-off', 'instead'], weight: 2 },
+      ],
+      redFlags: [{ description: 'Recites a definition without applying it', severity: 'medium' }],
+    },
+  });
 }
