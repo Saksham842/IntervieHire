@@ -1,0 +1,322 @@
+/* Test Interview pane — dev launcher for a full blueprint run.
+   Laptop-first single hero column + question preview. Midnight/teal. */
+
+.ti-pane {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 8px 4px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Hero card ─────────────────────────────────────────────────────────── */
+.ti-hero {
+  position: relative;
+  display: flex;
+  gap: 18px;
+  padding: 26px 28px;
+  overflow: hidden;
+}
+.ti-hero-glow {
+  position: absolute;
+  top: -40%;
+  right: -10%;
+  width: 320px;
+  height: 320px;
+  background: var(--gradient-orb-indigo);
+  pointer-events: none;
+  opacity: 0.8;
+}
+.ti-hero-icon {
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: var(--color-gold);
+  background: var(--color-gold-dim);
+  border: 1px solid var(--color-gold-border);
+  box-shadow: 0 0 22px var(--color-gold-glow);
+}
+.ti-hero-body { position: relative; flex: 1; min-width: 0; }
+
+.ti-eyebrow {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-gold);
+  margin-bottom: 6px;
+}
+.ti-title {
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--color-text);
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+.ti-subtitle {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--color-text-dim, #9a9a9a);
+  margin: 0 0 18px;
+}
+.ti-subtitle strong { color: var(--color-text); font-weight: 600; }
+
+/* ── Blueprint stats ───────────────────────────────────────────────────── */
+.ti-stats {
+  display: flex;
+  gap: 26px;
+  padding: 14px 0 20px;
+  border-top: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+}
+.ti-stat { display: flex; flex-direction: column; gap: 2px; }
+.ti-stat-val {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-gold);
+  line-height: 1;
+}
+.ti-stat-label {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ── Launch button ─────────────────────────────────────────────────────── */
+.ti-launch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #04201c;
+  background: linear-gradient(135deg, var(--color-gold-light), var(--color-gold));
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 6px 20px var(--color-gold-glow);
+  transition: transform var(--duration-fast, 150ms) ease, box-shadow var(--duration-fast, 150ms) ease, filter var(--duration-fast, 150ms) ease;
+}
+.ti-launch-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 28px var(--color-gold-glow); filter: brightness(1.05); }
+.ti-launch-btn:active { transform: translateY(0); }
+.ti-launch-btn:disabled,
+.ti-launch-btn.is-loading { cursor: progress; opacity: 0.85; transform: none; filter: saturate(0.8); }
+
+.ti-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(4, 32, 28, 0.35);
+  border-top-color: #04201c;
+  border-radius: 50%;
+  animation: ti-spin 0.6s linear infinite;
+}
+@keyframes ti-spin { to { transform: rotate(360deg); } }
+
+.ti-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--color-text-faint);
+}
+.ti-hint code {
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  color: var(--color-gold-light);
+}
+
+.ti-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--color-text);
+  background: var(--color-success-dim);
+  border: 1px solid rgba(52, 211, 153, 0.28);
+}
+.ti-result svg { color: var(--color-success); flex-shrink: 0; }
+.ti-result a { color: var(--color-gold-light); font-weight: 600; text-decoration: none; }
+.ti-result a:hover { text-decoration: underline; }
+
+/* ── Warning (no blueprint) ────────────────────────────────────────────── */
+.ti-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 16px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text-dim, #9a9a9a);
+  background: rgba(251, 146, 60, 0.08);
+  border: 1px solid rgba(251, 146, 60, 0.24);
+}
+.ti-warn svg { color: var(--color-orange); flex-shrink: 0; margin-top: 1px; }
+.ti-warn strong { color: var(--color-text); font-weight: 600; }
+
+/* ── Question preview ──────────────────────────────────────────────────── */
+.ti-preview { padding: 20px 24px; }
+.ti-preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.ti-preview-head h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.ti-preview-count {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ti-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ti-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  transition: background var(--duration-fast, 150ms) ease;
+}
+.ti-preview-row:hover { background: var(--glass-bg-hover); }
+.ti-preview-num {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--color-gold);
+  background: var(--color-gold-dim);
+  border-radius: 6px;
+}
+.ti-preview-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--color-text-dim, #c4c4c4);
+}
+.ti-preview-diff {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ti-diff-easy   { color: #34d399; background: rgba(52, 211, 153, 0.12); }
+.ti-diff-medium { color: #fbbf24; background: rgba(251, 191, 36, 0.12); }
+.ti-diff-hard   { color: #f87171; background: rgba(248, 113, 113, 0.12); }
+.ti-preview-more {
+  margin: 12px 0 0;
+  padding-left: 10px;
+  font-size: 11.5px;
+  color: var(--color-text-faint);
+}
+
+/* ── Empty state (local mode) ──────────────────────────────────────────── */
+.ti-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 64px 24px;
+  text-align: center;
+}
+.ti-empty p { margin: 0; font-size: 14px; color: var(--color-text-dim, #9a9a9a); }
+.ti-empty-sub { font-size: 12.5px; color: var(--color-text-faint); max-width: 360px; }
+
+@media (max-width: 640px) {
+  .ti-hero { flex-direction: column; gap: 14px; }
+  .ti-stats { gap: 18px; }
+}
+
+/* ── Embedded interview room (runs inside the portal) ──────────────────────── */
+.ti-embed {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+.ti-embed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--glass-bg, rgba(255,255,255,0.04));
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+}
+.ti-embed-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--color-text-dim, #c4c4c4);
+}
+.ti-embed-title strong { color: var(--color-text); font-weight: 650; }
+.ti-embed-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success, #34d399);
+  box-shadow: 0 0 10px var(--color-success, #34d399);
+  animation: ti-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ti-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.ti-embed-actions { display: flex; align-items: center; gap: 10px; }
+.ti-embed-link {
+  font-size: 12px;
+  color: var(--color-gold-light);
+  text-decoration: none;
+  font-weight: 600;
+}
+.ti-embed-link:hover { text-decoration: underline; }
+.ti-embed-close {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  transition: background var(--duration-fast, 150ms) ease;
+}
+.ti-embed-close:hover { background: rgba(248, 113, 113, 0.22); }
+.ti-embed-frame {
+  width: 100%;
+  height: 78vh;
+  min-height: 560px;
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  border-radius: 14px;
+  background: #05070e;
+  display: block;
+}
