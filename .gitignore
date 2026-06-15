@@ -46,6 +46,9 @@ coverage/
 .DS_Store
 Thumbs.db
 
+# Local agent tooling / planning artifacts
+.claude/
+
 # Test/automation
 .playwright-mcp/
 test-results/

@@ -17,7 +17,13 @@ import {
   computeGenerationPlan, analyzeRequirements, pinBlueprintToRequirements, mergeBlueprintPreservingEdits,
   localFunctionalBlueprint, localScreeningQuestions, localGapQuestion, localScenarioVariant,
   computeCoverage, computeCalibration, computeBandFit, rubricStrength, critiqueRubric, critiqueBlueprint, leakageRisk,
+  createTopicSuggestion, suggestTopics, localTopicSuggestions,
+  autofillOutlineNotes, runSheetMarkdown, normalizeInterviewStructure, topicMinutes,
 } from './blueprint-engine.js';
+
+// Third top-level mode: the read-first Run-of-Show document. The engine owns
+// 'functional'/'screening'; 'outline' is a studio-only view of the same data.
+const MODE_OUTLINE = 'outline';
 
 // Shared mutable UI state — imported bindings are read-only, so studio view
 // state lives on a plain object (same pattern as questionStaging/spotlightUi).
@@ -30,6 +36,10 @@ const studioUi = {
   generating: false,
   draftingReq: null,
   scenarioQid: null,
+  // Suggested-topics curation gate (transient until Generate runs).
+  topicSuggestions: null,   // [{id,name,type,difficulty,rationale,accepted}] | null
+  suggestingTopics: false,
+  editingSuggId: null,
 };
 
 let dragState = null;
@@ -51,6 +61,9 @@ const TYPE_TINT = {
 const DIFF_TINT = { Easy: '#34d399', Medium: '#fbbf24', Hard: '#f87171' };
 const SEV_TINT = { low: '#9a9a9a', medium: '#fbbf24', high: '#fb923c', critical: '#f87171' };
 const tint = (map, key) => map[key] || '#9a9a9a';
+// Local trim helper — the engine's `clean` is module-private; the studio only
+// needs the trim-or-empty behaviour for run-sheet prose checks.
+const txt = (v) => (typeof v === 'string' ? v.trim() : '');
 
 // ── Data accessors (own the canonical objects on the job so edits persist) ───
 function functionalOf(job) {
@@ -64,6 +77,12 @@ function screeningOf(job) {
     job.screeningBlueprint = emptyScreeningBlueprint();
   }
   return job.screeningBlueprint;
+}
+// Ensure the interview-level run-sheet bookends exist + are coerced. Owns the
+// canonical object on the blueprint so inline edits in Outline mode persist.
+function structureOf(fb) {
+  fb.interviewStructure = normalizeInterviewStructure(fb.interviewStructure);
+  return fb.interviewStructure;
 }
 function allQuestions(fb) {
   return (fb.topics || []).flatMap((t) => t.questions.map((q) => ({ q, topic: t })));
@@ -148,6 +167,16 @@ export function renderBlueprintStudio(job) {
   screeningOf(job);
   pane.innerHTML = shellMarkup(job);
   bindStudio(pane, job);
+  if (studioUi.mode === MODE_OUTLINE) autosizeOutlineFields(pane);
+}
+
+// Grow the document-styled run-sheet textareas to fit their content (a fallback
+// for browsers without CSS field-sizing; harmless where it's supported).
+function autosizeOutlineFields(pane) {
+  pane.querySelectorAll('.bs-rs-field').forEach((el) => {
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  });
 }
 
 // ── Markup ─────────────────────────────────────────────────────────────────
@@ -157,27 +186,35 @@ function shellMarkup(job) {
   const cov = computeCoverage(job, fb);
   const covOk = cov.filter((c) => c.status === 'ok').length;
   const isFn = studioUi.mode === MODE_FUNCTIONAL;
+  const isOutline = studioUi.mode === MODE_OUTLINE;
   const screeningCount = screeningOf(job).questions.length;
 
   return `
-  <div class="bs-studio ${studioUi.inspectorOpen ? 'inspector-open' : ''}">
+  <div class="bs-studio ${studioUi.inspectorOpen && !isOutline ? 'inspector-open' : ''} ${isOutline ? 'outline-mode' : ''}">
     <div class="bs-topbar">
       <div class="bs-tb-heading">
         <span class="bs-tb-crumb">${escapeHTML(job.roleName || job.cardName || 'Role')}</span>
         <h2 class="bs-tb-title"><span class="bs-dot"></span> Interview Blueprint Studio</h2>
       </div>
       <div class="bs-mode-toggle" role="tablist">
-        <button class="bs-mode-btn ${!isFn ? 'active alt' : ''}" data-action="mode" data-mode="${MODE_SCREENING}"><span class="bs-md"></span> Screening</button>
+        <button class="bs-mode-btn ${studioUi.mode === MODE_SCREENING ? 'active alt' : ''}" data-action="mode" data-mode="${MODE_SCREENING}"><span class="bs-md"></span> Screening</button>
         <button class="bs-mode-btn ${isFn ? 'active' : ''}" data-action="mode" data-mode="${MODE_FUNCTIONAL}"><span class="bs-md"></span> Functional</button>
+        <button class="bs-mode-btn ${isOutline ? 'active out' : ''}" data-action="mode" data-mode="${MODE_OUTLINE}"><span class="bs-md"></span> Outline</button>
       </div>
-      <button class="bs-btn-generate ${studioUi.generating ? 'generating' : ''}" data-action="generate" ${studioUi.generating ? 'disabled' : ''}>
+      ${isOutline ? '' : `<button class="bs-btn-generate ${studioUi.generating ? 'generating' : ''}" data-action="generate" ${studioUi.generating ? 'disabled' : ''}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         <span class="bs-btn-text">${studioUi.generating ? (studioUi.genLabel || 'Generating…') : (isFn ? 'Generate blueprint' : 'Generate questions')}</span>
-      </button>
+      </button>`}
     </div>
 
     <div class="bs-strip">
-      ${isFn ? `
+      ${isOutline ? `
+        <span class="bs-stat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> <b>${cal.totalMinutes}</b> min run</span>
+        <span class="bs-sep"></span>
+        <span class="bs-stat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg> <b>${cal.topicCount}</b> topic${cal.topicCount !== 1 ? 's' : ''} · <b>${cal.questionCount}</b> question${cal.questionCount !== 1 ? 's' : ''}</span>
+        <span class="bs-sep"></span>
+        <span class="bs-stat bs-stat-muted">The interviewer's run of show — opening, topics, what to listen for, closing</span>
+      ` : isFn ? `
         <span class="bs-stat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> <b>${cal.totalMinutes}</b> min</span>
         <span class="bs-sep"></span>
         <span class="bs-stat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/></svg> <b>${cal.questionCount}</b> question${cal.questionCount !== 1 ? 's' : ''}</span>
@@ -192,31 +229,213 @@ function shellMarkup(job) {
       `}
       <span class="bs-spacer"></span>
       ${saveStatusMarkup()}
-      <button class="bs-insp-toggle" data-action="toggle-inspector">
+      ${isOutline ? '' : `<button class="bs-insp-toggle" data-action="toggle-inspector">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
         ${studioUi.inspectorOpen ? 'Hide' : 'Inspector'}
-      </button>
+      </button>`}
     </div>
 
     <div class="bs-work">
       <div class="bs-canvas">
         <div class="bs-panel">
-          ${isFn ? functionalCanvas(job, fb) : screeningCanvas(job)}
+          ${isOutline ? outlineCanvas(job, fb) : isFn ? functionalCanvas(job, fb) : screeningCanvas(job)}
         </div>
       </div>
-      ${studioUi.inspectorOpen ? `<div class="bs-inspector">${inspectorMarkup(job, fb, cov, cal)}</div>` : ''}
+      ${studioUi.inspectorOpen && !isOutline ? `<div class="bs-inspector">${inspectorMarkup(job, fb, cov, cal)}</div>` : ''}
     </div>
   </div>`;
 }
 
 function functionalCanvas(job, fb) {
-  if (!fb.topics.length) return emptyState('No blueprint yet', 'Add a job description, then Generate to draft a topic-grouped interview with graded rubrics.');
+  const gate = (studioUi.suggestingTopics || studioUi.topicSuggestions) ? suggestedTopicsPanel() : '';
+  if (!fb.topics.length) {
+    // Empty: lead with the suggestion gate if it's active, else offer "Suggest
+    // topics" as the primary, curated path into generation.
+    return gate || `<div class="bs-empty">
+      <div class="bs-empty-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg></div>
+      <p class="bs-empty-title">No blueprint yet</p>
+      <p class="bs-empty-desc">Start from recommended topics for this role, or generate a full blueprint straight away.</p>
+      <div class="bs-empty-actions">
+        <button class="bs-mini-btn primary" data-action="suggest-topics"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg> Suggest topics</button>
+        <button class="bs-mini-btn ghost" data-action="generate">Generate blueprint</button>
+      </div>
+    </div>`;
+  }
   return `
+    ${gate}
     <div class="bs-canvas-head">
       <div><div class="bs-canvas-title">Functional blueprint</div><div class="bs-canvas-sub">${fb.topics.length} topic${fb.topics.length !== 1 ? 's' : ''} · drag to reorder · every question carries a graded rubric</div></div>
-      <button class="bs-mini-btn" data-action="add-topic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Topic</button>
+      <div class="bs-head-actions">
+        <button class="bs-mini-btn ghost" data-action="suggest-topics" ${studioUi.generating ? 'disabled' : ''}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg> Topics</button>
+        <button class="bs-mini-btn" data-action="add-topic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Topic</button>
+      </div>
     </div>
     ${fb.topics.map((t) => topicMarkup(t)).join('')}`;
+}
+
+// ── Suggested-topics gate (curation before generation) ───────────────────────
+function suggestedTopicsPanel() {
+  if (studioUi.suggestingTopics) {
+    return `<div class="bs-suggest bs-reveal">
+      <div class="bs-suggest-head"><div>
+        <div class="bs-suggest-title">Reading the role…</div>
+        <div class="bs-suggest-sub">Finding the topic areas worth probing for this position.</div>
+      </div></div>
+      ${[0, 1, 2, 3].map(() => '<div class="bs-sugg-skel"><span class="bs-shimmer"></span></div>').join('')}
+    </div>`;
+  }
+  const list = studioUi.topicSuggestions || [];
+  if (!list.length) return '';
+  // Count only generatable topics (accepted AND named) so the Generate button's
+  // enabled state + label match the seed the handler actually uses.
+  const kept = list.filter((s) => s.accepted && (s.name || '').trim()).length;
+  return `<div class="bs-suggest bs-reveal">
+    <div class="bs-suggest-head">
+      <div>
+        <div class="bs-suggest-title">Recommended topics for this role</div>
+        <div class="bs-suggest-sub">Keep the areas worth probing — Generate builds rubric-graded questions for the ones you keep.</div>
+      </div>
+      <span class="bs-suggest-count"><b>${kept}</b> / ${list.length} kept</span>
+    </div>
+    ${list.map((s) => suggItemMarkup(s)).join('')}
+    <button class="bs-mini-btn ghost bs-sugg-add" data-action="add-topic-suggestion"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add a topic of your own</button>
+    <div class="bs-suggest-foot">
+      <button class="bs-mini-btn ghost" data-action="suggest-topics" ${studioUi.generating ? 'disabled' : ''}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-suggest</button>
+      <button class="bs-btn-generate bs-sugg-gen ${studioUi.generating ? 'generating' : ''}" data-action="generate-from-topics" ${studioUi.generating || !kept ? 'disabled' : ''}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <span class="bs-btn-text">${studioUi.generating ? (studioUi.genLabel || 'Generating…') : `Generate from ${kept} topic${kept !== 1 ? 's' : ''}`}</span>
+      </button>
+    </div>
+  </div>`;
+}
+
+function suggItemMarkup(s) {
+  if (studioUi.editingSuggId === s.id) {
+    return `<div class="bs-sugg-item on editing" data-sugg-id="${s.id}">
+      <div class="bs-sugg-body">
+        <input class="bs-input bs-sugg-name-input" data-action="edit-suggestion" data-sugg-id="${s.id}" data-field="name" value="${escapeHTML(s.name)}" placeholder="Topic name" />
+        <input class="bs-input bs-sugg-why-input" data-action="edit-suggestion" data-sugg-id="${s.id}" data-field="rationale" value="${escapeHTML(s.rationale)}" placeholder="Why this area matters for the role…" />
+      </div>
+      <button class="bs-icon-btn" data-action="done-suggestion" data-sugg-id="${s.id}" title="Done"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></button>
+    </div>`;
+  }
+  return `<div class="bs-sugg-item ${s.accepted ? 'on' : 'off'}" data-sugg-id="${s.id}">
+    <button class="bs-sugg-check" data-action="toggle-topic-suggestion" data-sugg-id="${s.id}" title="${s.accepted ? 'Keep this topic' : 'Skip this topic'}">
+      ${s.accepted
+        ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+        : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'}
+    </button>
+    <div class="bs-sugg-body">
+      <div class="bs-sugg-name">${escapeHTML(s.name)} <span class="bs-sugg-meta">${escapeHTML(s.type)} · ${escapeHTML(s.difficulty)}</span></div>
+      ${txt(s.rationale) ? `<div class="bs-sugg-why"><span class="bs-why-tag">why</span> ${escapeHTML(s.rationale)}</div>` : ''}
+    </div>
+    <button class="bs-sugg-edit" data-action="edit-topic-suggestion" data-sugg-id="${s.id}" title="Edit"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+  </div>`;
+}
+
+// ── Outline mode: the interviewer's Run of Show ──────────────────────────────
+function outlineCanvas(job, fb) {
+  if (!fb.topics.length) {
+    return `<div class="bs-empty">
+      <div class="bs-empty-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg></div>
+      <p class="bs-empty-title">No interview to outline yet</p>
+      <p class="bs-empty-desc">Generate a functional blueprint first — this becomes the interviewer's run of show: opening, topics, what to listen for, and closing.</p>
+      <div class="bs-empty-actions"><button class="bs-mini-btn primary" data-action="mode" data-mode="${MODE_FUNCTIONAL}">Go to Functional</button></div>
+    </div>`;
+  }
+  const struct = structureOf(fb);
+  const cal = computeCalibration(fb);
+  const topics = fb.topics;
+  return `<div class="bs-runsheet">
+    ${runSheetMast(job, cal)}
+    <div class="bs-rs-doc">
+      <div class="bs-rs-row bs-rs-bookend" style="--i:0">
+        <span class="bs-rs-node open"></span>
+        <div class="bs-rs-content">
+          <div class="bs-rs-kicker">Opening <span class="bs-rs-time">~1 min</span></div>
+          ${outlineField('opening', null, null, struct.openingLine, 'Add an opening line the interviewer reads to set the tone…')}
+        </div>
+      </div>
+      ${topics.map((t, i) => runSheetMovement(t, i, topics.length)).join('')}
+      <div class="bs-rs-row bs-rs-bookend" style="--i:${topics.length + 1}">
+        <span class="bs-rs-node close"></span>
+        <div class="bs-rs-content">
+          <div class="bs-rs-kicker">Closing <span class="bs-rs-time">~2 min</span></div>
+          ${outlineField('closing', null, null, struct.closingLine, 'Add a closing line to wrap up and invite questions…')}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function runSheetMast(job, cal) {
+  return `<div class="bs-rs-mast">
+    <div class="bs-rs-mast-l">
+      <div class="bs-rs-kicker mast">Run of show</div>
+      <div class="bs-rs-role">${escapeHTML(job.roleName || job.cardName || 'Interview')}</div>
+      <div class="bs-rs-mast-sub">${cal.questionCount} question${cal.questionCount !== 1 ? 's' : ''} · ${cal.topicCount} topic${cal.topicCount !== 1 ? 's' : ''}</div>
+    </div>
+    <div class="bs-rs-mast-r">
+      <div class="bs-rs-clock"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> <b>${cal.totalMinutes}</b> min</div>
+      <div class="bs-rs-actions">
+        <button class="bs-mini-btn ghost" data-action="autofill-outline" title="Fill empty notes from the rubric — instant, offline"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg> Auto-fill notes</button>
+        <button class="bs-mini-btn ghost" data-action="copy-runsheet"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy run sheet</button>
+        <button class="bs-mini-btn ghost" data-action="print-runsheet"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function runSheetMovement(topic, idx, total) {
+  const mins = topicMinutes(topic);
+  const isLast = idx === total - 1;
+  return `<div class="bs-rs-row bs-rs-move" style="--i:${idx + 1}" data-topic-id="${topic.id}">
+    <span class="bs-rs-node"></span>
+    <div class="bs-rs-content">
+      <div class="bs-rs-move-head">
+        <span class="bs-rs-numeral">${String(idx + 1).padStart(2, '0')}</span>
+        <div class="bs-rs-move-titles">
+          <div class="bs-rs-topic-name">${escapeHTML(topic.name)}</div>
+          <div class="bs-rs-move-meta">
+            <span class="bs-chip ${topic.type === 'Experiential' ? 'exp' : 'theo'}">${escapeHTML(topic.type)}</span>
+            <span class="bs-chip ${topic.difficulty.toLowerCase()}">${escapeHTML(topic.difficulty)}</span>
+            <span class="bs-rs-time">~${mins} min</span>
+          </div>
+        </div>
+      </div>
+      <div class="bs-rs-note-row why">
+        <span class="bs-rs-label">Why this matters</span>
+        ${outlineField('why', topic.id, null, topic.whyItMatters, '+ add why this section matters')}
+      </div>
+      <ol class="bs-rs-qlist">
+        ${topic.questions.map((q) => runSheetQuestion(q, topic.id)).join('')}
+      </ol>
+      ${!isLast ? `<div class="bs-rs-segue">
+        <span class="bs-rs-segue-arrow"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></span>
+        ${outlineField('segue', topic.id, null, topic.segue, '+ add a segue into the next topic')}
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+function runSheetQuestion(q, topicId) {
+  return `<li class="bs-rs-q" data-q-id="${q.id}">
+    <div class="bs-rs-q-prompt">${escapeHTML(q.prompt) || '<span class="bs-faint">Untitled question</span>'}</div>
+    <div class="bs-rs-note-row listen">
+      <span class="bs-rs-label listen">Listen for</span>
+      ${outlineField('listen', topicId, q.id, (q.listenFor || []).join('\n'), '+ what a strong answer sounds like (one per line)')}
+    </div>
+    ${txt(q.followUpIntent) ? `<div class="bs-rs-followup"><span class="bs-rs-fu-arrow"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></svg></span> ${escapeHTML(q.followUpIntent)}</div>` : ''}
+  </li>`;
+}
+
+// Always-editable, document-styled prose field (Notion-like). oninput mutates +
+// persists without a re-render, so focus is never lost while typing.
+function outlineField(target, topicId, qid, value, placeholder) {
+  const v = txt(value);
+  const rows = Math.min(6, Math.max(1, (v.match(/\n/g) || []).length + 1, Math.ceil(v.length / 64) || 1));
+  const attrs = `data-action="input-outline" data-target="${target}"${topicId ? ` data-topic-id="${topicId}"` : ''}${qid ? ` data-q-id="${qid}"` : ''}`;
+  return `<textarea class="bs-rs-field ${target} ${v ? '' : 'empty'}" ${attrs} rows="${rows}" placeholder="${escapeHTML(placeholder)}">${escapeHTML(v)}</textarea>`;
 }
 
 function topicMarkup(topic) {
@@ -474,6 +693,7 @@ function bindStudio(pane, job) {
       case 'mode':
         studioUi.mode = el.dataset.mode;
         studioUi.expandedQuestionId = null;
+        studioUi.editingSuggId = null;
         soundEngine.playClick(); reRender(); break;
       case 'toggle-inspector':
         studioUi.inspectorOpen = !studioUi.inspectorOpen; soundEngine.playClick(); reRender(); break;
@@ -504,6 +724,46 @@ function bindStudio(pane, job) {
         soundEngine.playClick(); reRender(); break;
       case 'generate':
         await handleGenerate(job, reRender); break;
+      case 'suggest-topics':
+        await handleSuggestTopics(job, reRender); break;
+      case 'generate-from-topics': {
+        const seed = (studioUi.topicSuggestions || []).filter((s) => s.accepted && (s.name || '').trim());
+        if (!seed.length) { showPremiumToast('Keep at least one topic to generate from.', 'error'); break; }
+        await handleGenerate(job, reRender, { seed }); break;
+      }
+      case 'toggle-topic-suggestion': {
+        const s = (studioUi.topicSuggestions || []).find((x) => x.id === el.dataset.suggId);
+        if (s) { s.accepted = !s.accepted; soundEngine.playClick(); reRender(); } break;
+      }
+      case 'edit-topic-suggestion': {
+        studioUi.editingSuggId = el.dataset.suggId; reRender();
+        const node = document.querySelector(`.bs-sugg-item[data-sugg-id="${el.dataset.suggId}"] .bs-sugg-name-input`);
+        if (node && node.focus) node.focus();
+        break;
+      }
+      case 'done-suggestion':
+        studioUi.editingSuggId = null; soundEngine.playClick(); reRender(); break;
+      case 'add-topic-suggestion': {
+        if (!studioUi.topicSuggestions) studioUi.topicSuggestions = [];
+        const ns = createTopicSuggestion({ name: '', accepted: true });
+        studioUi.topicSuggestions.push(ns);
+        studioUi.editingSuggId = ns.id;
+        reRender();
+        const node = document.querySelector(`.bs-sugg-item[data-sugg-id="${ns.id}"] .bs-sugg-name-input`);
+        if (node && node.focus) node.focus();
+        break;
+      }
+      case 'autofill-outline': {
+        autofillOutlineNotes(functionalOf(job), job);
+        persist(); reRender();
+        showPremiumToast('Filled empty run-sheet notes from the rubric.', 'success');
+        soundEngine.playChime([523.25, 659.25], 0.12, 0.08);
+        break;
+      }
+      case 'copy-runsheet':
+        copyToClipboard(runSheetMarkdown(job, functionalOf(job))); break;
+      case 'print-runsheet':
+        if (typeof window !== 'undefined' && window.print) window.print(); break;
       case 'add-topic': {
         functionalOf(job).topics.push(createTopic({ name: 'New topic' }));
         persist(); reRender(); break;
@@ -539,6 +799,17 @@ function bindStudio(pane, job) {
 
   // Live edits — update model + save without a full re-render (keeps focus).
   pane.oninput = (e) => {
+    // Suggested-topic curation edits — transient UI state, no persist/re-render.
+    const sg = e.target.closest('[data-action="edit-suggestion"]');
+    if (sg) {
+      const s = (studioUi.topicSuggestions || []).find((x) => x.id === sg.dataset.suggId);
+      if (s) s[sg.dataset.field] = sg.value;
+      return;
+    }
+    // Run-sheet prose edits (Outline mode) — persist, no re-render (keeps focus).
+    const ol = e.target.closest('[data-action="input-outline"]');
+    if (ol) { applyOutlineEdit(job, ol); return; }
+
     const el = e.target.closest('[data-action="edit"], [data-action="edit-point"], [data-action="edit-flag"]');
     if (!el) return;
     const { q } = findQuestion(job, el.getAttribute('data-q-id'));
@@ -716,19 +987,66 @@ async function handleDraftGap(job, requirement, reRender) {
   if (node && node.scrollIntoView) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-async function handleGenerate(job, reRender) {
+// Recommend the topic areas worth probing for this role, with rationale, into a
+// curation gate the recruiter edits before generating. AI-first, local fallback.
+async function handleSuggestTopics(job, reRender) {
+  if (studioUi.generating || studioUi.suggestingTopics) return;
+  if (!(job.description || '').trim() && !(job.resumeCriteria?.mustHave || []).length) {
+    showPremiumToast('Add a job description so the AI can recommend topics.', 'error');
+    return;
+  }
+  studioUi.suggestingTopics = true;
+  studioUi.topicSuggestions = null;
+  studioUi.editingSuggId = null;
+  reRender();
+  soundEngine.playChime([392, 440], 0.1, 0.1);
+
+  const plan = computeGenerationPlan(job);
+  let requirements = plan.requirements;
+  try { requirements = await analyzeRequirements(job); } catch { requirements = plan.requirements; }
+
+  let list, offline = false;
+  try { list = await suggestTopics(job, requirements); }
+  catch { list = localTopicSuggestions(job, requirements); offline = true; }
+
+  studioUi.suggestingTopics = false;
+  studioUi.topicSuggestions = list;
+  reRender();
+  showPremiumToast(offline ? 'Suggested topics offline — keep the ones worth probing.' : 'Topics suggested — keep the ones worth probing.', 'success');
+  soundEngine.playChime([523.25, 659.25, 783.99], 0.18, 0.07);
+}
+
+// Stamp each generated topic's "why it matters" from the matching accepted
+// suggestion's rationale (only when the topic has none yet).
+function stampSeedRationale(fb, seed) {
+  if (!seed.length) return;
+  const byName = new Map(seed.map((s) => [String(s.name || '').trim().toLowerCase(), s]));
+  (fb.topics || []).forEach((t) => {
+    if (txt(t.whyItMatters)) return;
+    const s = byName.get(String(t.name || '').trim().toLowerCase());
+    if (s && txt(s.rationale)) t.whyItMatters = s.rationale;
+  });
+}
+
+async function handleGenerate(job, reRender, opts = {}) {
   if (studioUi.generating) return;
   if (!(job.description || '').trim() && !(job.resumeCriteria?.mustHave || []).length) {
     showPremiumToast('Add a job description so the AI can target questions.', 'error');
     return;
   }
+  // Seeded generation (from the curation gate): the accepted suggestions shape
+  // the topics, and the whole menu is persisted onto the blueprint.
+  const seed = Array.isArray(opts.seed) ? opts.seed : [];
+  const captured = seed.length && studioUi.topicSuggestions ? studioUi.topicSuggestions.slice() : null;
+
   studioUi.generating = true;
   studioUi.genLabel = studioUi.mode === MODE_FUNCTIONAL ? 'Outlining…' : 'Generating…';
   reRender();
   soundEngine.playChime([392, 440], 0.1, 0.1);
 
   const finish = (msg) => {
-    studioUi.generating = false; studioUi.genLabel = null; persist(); reRender();
+    studioUi.generating = false; studioUi.genLabel = null; studioUi.topicSuggestions = null; studioUi.editingSuggId = null;
+    persist(); reRender();
     showPremiumToast(msg, 'success');
     soundEngine.playChime([523.25, 659.25, 783.99], 0.18, 0.07);
   };
@@ -751,11 +1069,11 @@ async function handleGenerate(job, reRender) {
   // the offline path's pinning, then size topicCount to the RESOLVED requirement
   // count so the outline prompt's "~N topics" hint can fit "cover every one".
   try { requirements = await analyzeRequirements(job); } catch { requirements = plan.requirements; }
-  const topicCount = Math.min(6, Math.max(plan.topicCount, Math.ceil(requirements.length / plan.questionsPerTopic) || plan.topicCount));
+  const topicCount = seed.length || Math.min(6, Math.max(plan.topicCount, Math.ceil(requirements.length / plan.questionsPerTopic) || plan.topicCount));
 
   let fb, aiOk = true;
   try {
-    fb = await generateFunctionalOutline(job, { topicCount, questionsPerTopic: plan.questionsPerTopic, requirements });
+    fb = await generateFunctionalOutline(job, { topicCount, questionsPerTopic: plan.questionsPerTopic, requirements, topicSeed: seed });
     if (!fb.topics.length) throw new Error('empty');
   } catch {
     fb = localFunctionalBlueprint(job);
@@ -766,10 +1084,11 @@ async function handleGenerate(job, reRender) {
   // with a targeted gap question, so coverage is complete on both paths.
   fb = pinBlueprintToRequirements(job, fb, requirements);
   fb = mergeBlueprintPreservingEdits(existing, fb); // carry over hand-edited questions
+  if (seed.length) { stampSeedRationale(fb, seed); if (captured) fb.suggestedTopics = captured; }
   job.functionalParameters = fb;
   studioUi.expandedTopicId = fb.topics[0] ? fb.topics[0].id : null;
 
-  if (!aiOk) { finish('Blueprint drafted offline (template rubrics).'); return; }
+  if (!aiOk) { autofillOutlineNotes(fb, job); finish('Blueprint drafted offline (template rubrics).'); return; }
 
   // Phase 2: enrich each question's rubric in its own small call, bounded
   // concurrency, re-rendering as each lands so badges fill in progressively.
@@ -796,5 +1115,43 @@ async function handleGenerate(job, reRender) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(3, total) }, worker));
-  finish('Blueprint ready.');
+  // Now that rubrics exist, derive the run-sheet prose (only fills blanks).
+  autofillOutlineNotes(fb, job);
+  finish('Blueprint ready — outline populated.');
+}
+
+// Copy text to the clipboard with a user-visible toast either way.
+function copyToClipboard(text) {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => showPremiumToast('Run sheet copied as Markdown.', 'success'),
+        () => showPremiumToast('Couldn’t copy — try again or select manually.', 'error'),
+      );
+      return;
+    }
+  } catch { /* fall through */ }
+  showPremiumToast('Clipboard unavailable in this browser.', 'error');
+}
+
+// Write one Outline-mode prose edit back to its canonical object. No re-render
+// (focus-preserving); persist() handles localStorage + the debounced backend save.
+function applyOutlineEdit(job, el) {
+  const fb = functionalOf(job);
+  const target = el.dataset.target;
+  const val = el.value;
+  if (target === 'opening' || target === 'closing') {
+    const struct = structureOf(fb);
+    struct[target === 'opening' ? 'openingLine' : 'closingLine'] = val;
+  } else if (target === 'why' || target === 'segue') {
+    const topic = (fb.topics || []).find((t) => t.id === el.dataset.topicId);
+    if (topic) topic[target === 'why' ? 'whyItMatters' : 'segue'] = val;
+  } else if (target === 'listen') {
+    const { q } = findQuestion(job, el.getAttribute('data-q-id'));
+    if (q) { q.listenFor = val.split('\n').map((s) => s.trim()).filter(Boolean); q.edited = true; }
+  }
+  // Grow the field with its content (no re-render → focus preserved).
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+  persist();
 }

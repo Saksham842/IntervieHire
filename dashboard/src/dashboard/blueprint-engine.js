@@ -98,6 +98,10 @@ export function createQuestionBlueprint(overrides = {}) {
       redFlags: arr(overrides.rubric?.redFlags).map((f) => createRedFlag(f.description, f.severity)),
     },
     followUpIntent: clean(overrides.followUpIntent),
+    // Interviewer-facing run-sheet note: short signals of what a strong answer
+    // sounds like. Distinct from rubric points (which the evaluator grades) —
+    // this is what the human/avatar listens for live. Optional, defaults [].
+    listenFor: arr(overrides.listenFor).map((s) => clean(s)).filter(Boolean),
     // Set once the recruiter hand-edits/authors this question, so a later
     // "Generate" preserves it instead of clobbering manual work (survives reload
     // via the v2 guidance envelope).
@@ -111,8 +115,35 @@ export function createTopic(overrides = {}) {
     name: clean(overrides.name, 'Untitled topic'),
     type: oneOf(overrides.type, TOPIC_TYPES, 'Experiential'),
     difficulty: oneOf(overrides.difficulty, CONTRACT_DIFFICULTY, 'Medium'),
+    // Run-sheet structure (the interview-outline layer). Optional, default ''.
+    // whyItMatters: the section's rationale; segue: the line spoken when moving
+    // ON to the NEXT topic. Both author/edit in the studio's Outline mode.
+    whyItMatters: clean(overrides.whyItMatters),
+    segue: clean(overrides.segue),
     questions: arr(overrides.questions).map((q) => createQuestionBlueprint(q)),
   };
+}
+
+// A recommended topic area the recruiter curates BEFORE generation. Accepted
+// suggestions seed the outline call (their names become topics, their rationale
+// becomes the topic's whyItMatters). Curation-only — no questions yet.
+export function createTopicSuggestion(overrides = {}) {
+  return {
+    id: overrides.id || uid('ts'),
+    name: clean(overrides.name, 'Untitled topic'),
+    type: oneOf(overrides.type, TOPIC_TYPES, 'Experiential'),
+    difficulty: oneOf(overrides.difficulty, CONTRACT_DIFFICULTY, 'Medium'),
+    rationale: clean(overrides.rationale),
+    accepted: overrides.accepted !== false,
+  };
+}
+
+// Interview-level run-sheet bookends (what the avatar says before Q1 / after the
+// last answer). Recruiter-facing prose, not the engine's substring-matched
+// CLOSING_LINE constant. Coerced so a partial/legacy payload is always safe.
+export const emptyInterviewStructure = () => ({ openingLine: '', closingLine: '' });
+export function normalizeInterviewStructure(s) {
+  return { openingLine: clean(s?.openingLine), closingLine: clean(s?.closingLine) };
 }
 
 export const emptyFunctionalBlueprint = () => ({ topics: [] });
@@ -323,11 +354,18 @@ const ENRICH_BY_DIFFICULTY = {
 // enriches each question's rubric in its own small call. The studio fills
 // rubrics in progressively.
 function buildOutlineMessages(job, opts = {}) {
-  const topicCount = opts.topicCount || 4;
+  const seed = arr(opts.topicSeed).map((t) => clean(t.name)).filter(Boolean);
+  const topicCount = seed.length || opts.topicCount || 4;
   const perTopic = opts.questionsPerTopic || 2;
   const requirements = dedupeReqs(opts.requirements);
   const reqBlock = requirements.length
     ? `\n\nRequired competencies — cover EVERY one with at least one question and set that question's "targetRequirement" to the competency text VERBATIM:\n${requirements.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+    : '';
+  // When the recruiter curated a topic menu, honour it: one topic per accepted
+  // area, keeping the chosen names so the studio can stamp each topic's rationale
+  // back onto it as whyItMatters.
+  const seedBlock = seed.length
+    ? `\n\nUSE THESE TOPIC AREAS (the recruiter selected them) — one topic each, keep these names:\n${seed.map((n, i) => `${i + 1}. ${n}`).join('\n')}`
     : '';
   const system = `You are a senior interviewer and assessment designer. Author the OUTLINE of a FUNCTIONAL (deep, role-specific) interview an AI avatar will conduct by VOICE.
 
@@ -339,7 +377,7 @@ Rules:
 - targetRequirement: copy the matching competency VERBATIM from the numbered list; use "" only for an extra depth question that maps to none.
 - prompt: ONE idea, conversational, speakable aloud — no compound multi-part questions; prefer an applied scenario over a definition.
 - OUTLINE ONLY — do NOT include model answers or rubrics here.
-- No preamble, no trailing commentary.${reqBlock}`;
+- No preamble, no trailing commentary.${seedBlock}${reqBlock}`;
   return [{ role: 'system', content: system }, { role: 'user', content: `Outline the functional interview for:\n\n${jdContext(job)}` }];
 }
 
@@ -405,6 +443,48 @@ export function normalizeRubricPayload(parsed) {
 export async function generateScreeningQuestions(job, opts = {}) {
   const parsed = await callJson(buildScreeningMessages(job, opts));
   return normalizeScreeningBlueprint(parsed);
+}
+
+// ── Suggested topics (the curation step before generation) ───────────────────
+// Recommends the topic AREAS worth probing for this role, each with a short
+// interviewer-facing rationale. The recruiter accepts/rejects/edits them, and the
+// accepted set seeds generation (see buildOutlineMessages opts.topicSeed).
+function buildTopicSuggestionMessages(job, requirements = []) {
+  const reqs = dedupeReqs(requirements);
+  const reqBlock = reqs.length
+    ? `\n\nWeave these required competencies across the topics:\n${reqs.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+    : '';
+  const system = `You are a senior interviewer planning a FUNCTIONAL interview. Propose the TOPIC AREAS worth probing for this role, each with one short interviewer-facing rationale.
+
+Return ONLY JSON (no markdown), shape:
+{"suggestedTopics":[{"name":"short topic name","type":"Theoretical|Experiential","difficulty":"Easy|Medium|Hard","rationale":"1 sentence: what a strong vs weak answer in this area reveals about the candidate"}]}
+
+Rules:
+- 4-6 distinct, non-overlapping topics, ordered foundational → advanced.
+- rationale is for the RECRUITER, not the candidate — why this area separates real ability from someone who only memorised theory.
+- No preamble, no trailing commentary.${reqBlock}`;
+  return [{ role: 'system', content: system }, { role: 'user', content: `Suggest interview topics for:\n\n${jdContext(job)}` }];
+}
+
+export async function suggestTopics(job, requirements = []) {
+  const parsed = await callJson(buildTopicSuggestionMessages(job, requirements));
+  const out = arr(parsed?.suggestedTopics)
+    .map((t) => createTopicSuggestion(t))
+    .filter((t) => t.name && t.name !== 'Untitled topic');
+  if (!out.length) throw new Error('empty topic suggestions');
+  return out;
+}
+
+// Keyless fallback so "Suggest topics" always yields a real, role-aware menu
+// even with the AI proxy down — derived from the controlled requirement list.
+export function localTopicSuggestions(job, requirements = []) {
+  const reqs = dedupeReqs(requirements.length ? requirements : localRequirements(job));
+  return reqs.slice(0, 6).map((r, i, all) => createTopicSuggestion({
+    name: r,
+    type: i % 2 === 0 ? 'Experiential' : 'Theoretical',
+    difficulty: i === 0 ? 'Easy' : i >= all.length - 1 ? 'Hard' : 'Medium',
+    rationale: `Probes ${r.toLowerCase()} through applied scenarios — a prepared candidate can recite theory, but only real experience holds up when they have to reason about a concrete situation.`,
+  }));
 }
 
 // ── Requirement analysis (the controlled vocabulary questions pin to) ─────────
@@ -503,12 +583,17 @@ export async function generateScenarioVariant(job, qb) {
 // ── Normalization (coerce any AI/legacy payload into the contract shape) ─────
 export function normalizeFunctionalBlueprint(parsed) {
   const topics = arr(parsed?.topics).length ? parsed.topics : arr(parsed);
-  return { topics: topics.map((t) => createTopic({
+  const out = { topics: topics.map((t) => createTopic({
     name: t.name || t.topic,
     type: t.type,
     difficulty: t.difficulty,
+    whyItMatters: t.whyItMatters,
+    segue: t.segue,
     questions: arr(t.questions).map((q) => createQuestionBlueprint(q)),
   })).filter((t) => t.questions.length) };
+  if (parsed?.interviewStructure) out.interviewStructure = normalizeInterviewStructure(parsed.interviewStructure);
+  if (arr(parsed?.suggestedTopics).length) out.suggestedTopics = parsed.suggestedTopics.map((s) => createTopicSuggestion(s));
+  return out;
 }
 
 export function normalizeScreeningBlueprint(parsed) {
@@ -605,6 +690,11 @@ export function pinBlueprintToRequirements(job, functionalBlueprint, requirement
 // return value (the call site reassigns + stores it, discarding the old one).
 export function mergeBlueprintPreservingEdits(existingFb, freshFb) {
   const merged = freshFb && Array.isArray(freshFb.topics) ? freshFb : { topics: [] };
+  // Interview-level structure + the topic curation are NOT regenerated by the
+  // outline call, so carry them forward — a regenerate must not wipe the
+  // recruiter's opening/closing lines or their accepted topic menu.
+  if (existingFb?.interviewStructure && !merged.interviewStructure) merged.interviewStructure = existingFb.interviewStructure;
+  if (arr(existingFb?.suggestedTopics).length && !arr(merged.suggestedTopics).length) merged.suggestedTopics = existingFb.suggestedTopics;
   const edited = [];
   (existingFb?.topics || []).forEach((t) => t.questions.forEach((q) => { if (q.edited) edited.push({ q, topicName: t.name }); }));
   if (!edited.length) return merged;
@@ -651,6 +741,78 @@ export function computeCalibration(functionalBlueprint) {
     rubricReady,
     rubricCoverage: questions.length ? Math.round((rubricReady / questions.length) * 100) : 0,
   };
+}
+
+// ── Run-sheet derivation (the interview-outline layer) ───────────────────────
+// Minutes a topic budgets = sum of its questions' estimates (no separate stored
+// field — derived so it never goes stale against edits).
+export function topicMinutes(topic) {
+  return arr(topic?.questions).reduce((a, q) => a + (q.estimatedMinutes || MINUTES_BY_DIFFICULTY[q.difficulty] || 4), 0);
+}
+
+// Populate the interviewer-facing run-sheet prose from data the blueprint already
+// has — opening/closing bookends, each topic's "why it matters" + segue, and each
+// question's "listen for" signals (lifted from its required points). ONLY fills
+// blanks: never clobbers a recruiter's authored note or an AI-supplied rationale.
+// Pure + local (no AI), so it runs instantly and offline. Mutates + returns fb.
+export function autofillOutlineNotes(functionalBlueprint, job = {}) {
+  const fb = functionalBlueprint;
+  if (!fb || !Array.isArray(fb.topics)) return fb;
+  fb.interviewStructure = normalizeInterviewStructure(fb.interviewStructure);
+  const topics = fb.topics;
+  const roleLabel = clean(job.roleName) || clean(job.cardName) || 'this role';
+  const totalQ = topics.reduce((s, t) => s + t.questions.length, 0);
+  if (!fb.interviewStructure.openingLine) {
+    fb.interviewStructure.openingLine = `Hi, thanks for making the time today — I'm Lina, and I'll be running your interview for ${roleLabel}. We'll move through ${topics.length} area${topics.length !== 1 ? 's' : ''}, around ${totalQ} question${totalQ !== 1 ? 's' : ''} in total, and I may ask a quick follow-up here and there. There are no trick questions, so take your time and think out loud. Ready when you are.`;
+  }
+  if (!fb.interviewStructure.closingLine) {
+    fb.interviewStructure.closingLine = `That's everything from my side — thank you for walking me through all of that. We'll review your answers and be in touch about next steps. Before we wrap up, is there anything you'd like to ask me?`;
+  }
+  topics.forEach((t, ti) => {
+    if (!clean(t.whyItMatters)) {
+      const req = t.questions.map((q) => clean(q.targetRequirement)).find(Boolean);
+      t.whyItMatters = req
+        ? `Tests ${req} — separates candidates who have genuinely done this from those who only know the theory.`
+        : `Explores ${t.name.toLowerCase()} in depth to see how the candidate reasons through it, not just what they can recall.`;
+    }
+    if (!clean(t.segue) && ti < topics.length - 1) {
+      t.segue = `Great, thanks for that. Let's shift gears and talk about ${topics[ti + 1].name.toLowerCase()}.`;
+    }
+    t.questions.forEach((q) => {
+      if (!arr(q.listenFor).length) {
+        const pts = arr(q.rubric?.requiredPoints).map((p) => clean(p.description)).filter(Boolean).slice(0, 3);
+        if (pts.length) q.listenFor = pts;
+      }
+    });
+  });
+  return fb;
+}
+
+// Serialize the whole run-of-show as clean Markdown — the interviewer's
+// leave-behind (copied to clipboard from the Outline view).
+export function runSheetMarkdown(job, functionalBlueprint) {
+  const fb = functionalBlueprint || { topics: [] };
+  const struct = normalizeInterviewStructure(fb.interviewStructure);
+  const topics = fb.topics || [];
+  const cal = computeCalibration(fb);
+  const roleLabel = clean(job.roleName) || clean(job.cardName) || 'Role';
+  const lines = [`# Run of Show — ${roleLabel}`, '', `_${cal.questionCount} question${cal.questionCount !== 1 ? 's' : ''} · ${topics.length} topic${topics.length !== 1 ? 's' : ''} · ~${cal.totalMinutes} min_`, ''];
+  if (struct.openingLine) lines.push('## Opening', `> ${struct.openingLine}`, '');
+  topics.forEach((t, i) => {
+    lines.push(`## ${String(i + 1).padStart(2, '0')} · ${t.name}  (${t.difficulty} · ~${topicMinutes(t)} min)`);
+    if (clean(t.whyItMatters)) lines.push(`**Why this matters:** ${t.whyItMatters}`);
+    lines.push('');
+    t.questions.forEach((q, qi) => {
+      lines.push(`${qi + 1}. ${clean(q.prompt) || '_(untitled question)_'}`);
+      const lf = arr(q.listenFor).filter(Boolean);
+      if (lf.length) lines.push(`   - _Listen for:_ ${lf.join('; ')}`);
+      if (clean(q.followUpIntent)) lines.push(`   - _Follow up:_ ${q.followUpIntent}`);
+    });
+    lines.push('');
+    if (clean(t.segue)) lines.push(`_Segue → ${t.segue}_`, '');
+  });
+  if (struct.closingLine) lines.push('## Closing', `> ${struct.closingLine}`, '');
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // ── Difficulty calibration to the experience band ───────────────────────────
@@ -741,22 +903,43 @@ export function toAiEvaluationGuidance(qb) {
 // authored rubric so an extended sync can populate aiEvaluationGuidance per
 // question instead of regenerating it generically.
 export function toFunctionalParameters(functionalBlueprint) {
-  return {
-    topics: (functionalBlueprint.topics || []).map((t) => ({
-      name: t.name,
-      type: t.type,
-      difficulty: t.difficulty,
-      questions: t.questions.map((q) => q.prompt),
-      questionsDetailed: t.questions.map((q) => ({
-        id: q.id,
-        text: q.prompt,
-        questionType: q.questionType,
-        difficulty: q.difficulty,
-        estimatedMinutes: q.estimatedMinutes,
-        aiEvaluationGuidance: toAiEvaluationGuidance(q),
-      })),
-    })),
+  const struct = functionalBlueprint.interviewStructure;
+  const out = {
+    topics: (functionalBlueprint.topics || []).map((t) => {
+      const topic = {
+        name: t.name,
+        type: t.type,
+        difficulty: t.difficulty,
+        questions: t.questions.map((q) => q.prompt),
+        questionsDetailed: t.questions.map((q) => {
+          const detail = {
+            id: q.id,
+            text: q.prompt,
+            questionType: q.questionType,
+            difficulty: q.difficulty,
+            estimatedMinutes: q.estimatedMinutes,
+            aiEvaluationGuidance: toAiEvaluationGuidance(q),
+          };
+          if (arr(q.listenFor).length) detail.listenFor = q.listenFor;
+          return detail;
+        }),
+      };
+      // Run-sheet fields ride along on the topic; ai_sync.py ignores unknown keys
+      // so this stays drop-in compatible with the current backend sync.
+      if (clean(t.whyItMatters)) topic.whyItMatters = t.whyItMatters;
+      if (clean(t.segue)) topic.segue = t.segue;
+      return topic;
+    }),
   };
+  if (struct && (clean(struct.openingLine) || clean(struct.closingLine))) {
+    out.interviewStructure = { openingLine: clean(struct.openingLine), closingLine: clean(struct.closingLine) };
+  }
+  if (arr(functionalBlueprint.suggestedTopics).length) {
+    out.suggestedTopics = functionalBlueprint.suggestedTopics.map((s) => ({
+      id: s.id, name: s.name, type: s.type, difficulty: s.difficulty, rationale: s.rationale, accepted: s.accepted !== false,
+    }));
+  }
+  return out;
 }
 
 // Backend `screening_questions` is a plain string[]; we keep the rich drafts
