@@ -23,7 +23,9 @@ function renderJobDetailPanes(job) {
   const searchVal = document.getElementById('jd-candidate-search').value.trim().toLowerCase();
   
   const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
-    const matchesJob = c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+    const matchesJob = (getDataSource() === 'api' && job._backend)
+      ? c.jobId === job.id
+      : (c.jobApplied === job.roleName || c.jobApplied === job.cardName);
     if (!matchesJob) return false;
     if (searchVal) {
       return c.name.toLowerCase().includes(searchVal) || c.email.toLowerCase().includes(searchVal);
@@ -453,7 +455,12 @@ function renderJobDetailPanes(job) {
       });
     });
 
-    const jobCands = AppState.candidates.filter(c => c.jobApplied === job.roleName || c.jobApplied === job.cardName);
+    const jobCands = AppState.candidates.filter(c => {
+      if (getDataSource() === 'api' && job._backend) {
+        return c.jobId === job.id;
+      }
+      return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+    });
     const stageStatusMap = { screening: 'Screening', functional: 'Functional' };
     pane.querySelectorAll('.filter-chip[data-filter]').forEach(chip => {
       chip.addEventListener('click', (e) => {
@@ -748,9 +755,12 @@ function refreshAfterStageChange() {
     renderFunnelStages(activeJob);
     renderFunnelInsights(activeJob);
 
-    const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(
-      c => c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName
-    );
+    const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
+      if (getDataSource() === 'api' && activeJob._backend) {
+        return c.jobId === activeJob.id;
+      }
+      return c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName;
+    });
     drawFunnelSVG(activeJob, jobCandidates);
     drawScoreDistributionSVG(activeJob, jobCandidates);
 

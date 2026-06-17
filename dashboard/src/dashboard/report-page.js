@@ -8,6 +8,7 @@ import { getCandidateNextStage, getCandidateTranscriptLines } from './report.js'
 import { getScoringConfig } from './scoring-config.js';
 import { soundEngine } from './sound.js';
 import { AppState } from './state.js';
+import { getDataSource } from './api.js';
 
 // ==========================================
 // CANDIDATE REPORT — FULL PAGE VIEW
@@ -24,6 +25,10 @@ function findCandidate(cid) {
 }
 
 function findJobForCandidate(candidate) {
+  if (candidate.jobId) {
+    const job = AppState.jobs.find(j => j.id === candidate.jobId);
+    if (job) return job;
+  }
   return AppState.jobs.find(j => j.roleName === candidate.jobApplied || j.cardName === candidate.jobApplied) || AppState.jobs[0];
 }
 
@@ -140,7 +145,12 @@ function renderOverviewPane(candidate, job, analysis) {
   const score = overallScoreOf(candidate, analysis);
   const comps = getCompetencies(analysis);
   const config = getScoringConfig(job);
-  const jobCandidateCount = AppState.candidates.filter(c => c.jobApplied === candidate.jobApplied).length;
+  const jobCandidateCount = AppState.candidates.filter(c => {
+    if (getDataSource() === 'api' && job && job._backend) {
+      return c.jobId === job.id;
+    }
+    return c.jobApplied === candidate.jobApplied;
+  }).length;
 
   const positionBlock = jobCandidateCount > 20
     ? `<div class="rp-position-track"><div class="rp-position-marker" style="left:${score}%"></div></div>`

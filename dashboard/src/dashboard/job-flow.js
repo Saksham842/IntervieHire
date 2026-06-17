@@ -9,6 +9,7 @@ import { renderJobCards } from './render-views.js';
 import { soundEngine } from './sound.js';
 import { navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
+import { getDataSource } from './api.js';
 import { ensureFunctionalBlueprint, computeCalibration } from './blueprint-engine.js';
 import { pushUrl } from './url-sync.js';
 
@@ -185,7 +186,12 @@ function migrateCandidatesOfJob(job) {
   const cfg = job.pipelineConfig;
   if (!cfg) return;
 
-  const jobCandidates = AppState.candidates.filter(c => c.jobApplied === job.roleName || c.jobApplied === job.cardName);
+  const jobCandidates = AppState.candidates.filter(c => {
+    if (getDataSource() === 'api' && job._backend) {
+      return c.jobId === job.id;
+    }
+    return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+  });
 
   jobCandidates.forEach(candidate => {
     let currentStatus = candidate.status;
@@ -1016,9 +1022,12 @@ function renderFunnelStages(job) {
 
   const total = Math.max(job.pipeline.total, 1);
 
-  const jobCandidates = AppState.candidates.filter(
-    c => c.jobApplied === job.roleName || c.jobApplied === job.cardName
-  );
+  const jobCandidates = AppState.candidates.filter(c => {
+    if (getDataSource() === 'api' && job._backend) {
+      return c.jobId === job.id;
+    }
+    return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+  });
 
   const completedCount = jobCandidates.filter(c => c.interviewStatus === 'Completed').length;
   const qualifiedCount = jobCandidates.filter(c => c.status === 'Hired').length;

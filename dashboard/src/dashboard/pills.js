@@ -2,6 +2,7 @@ import { document, window, MutationObserver, setTimeout, clearTimeout } from './
 import { drawFunnelSVG, drawScoreDistributionSVG } from './funnel-charts.js';
 import { filterCandidatesByDateRange } from './render-views.js';
 import { AppState } from './state.js';
+import { getDataSource } from './api.js';
 
 // ==========================================
 // CRYSTAL GLASS SLIDING PILLS ENGINE (iOS-style Segmented Control)
@@ -92,9 +93,12 @@ function initSlidingPills() {
       if (AppState.activeTab === 'job-detail' && AppState.activeJobId) {
         const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
         if (activeJob) {
-          const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(
-            c => c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName
-          );
+          const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
+            if (getDataSource() === 'api' && activeJob._backend) {
+              return c.jobId === activeJob.id;
+            }
+            return c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName;
+          });
           drawFunnelSVG(activeJob, jobCandidates);
           drawScoreDistributionSVG(activeJob, jobCandidates);
         }

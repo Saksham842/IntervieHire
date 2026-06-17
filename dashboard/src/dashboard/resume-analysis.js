@@ -8,6 +8,7 @@ import { computeWeightedScore, getScoringConfig, recommendationFromScore } from 
 import { soundEngine } from './sound.js';
 import { addCandidateToAppState, extractResumeIdentity, showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
+import { getDataSource } from './api.js';
 
 // ==========================================
 // RESUME ANALYSIS (AI-powered, Lina)
@@ -941,6 +942,9 @@ function toggleResumeCriteriaEdit(job) {
     const resumeList = document.getElementById('list-stage-resume');
     if (resumeList) {
       const jobCandidates = AppState.candidates.filter(c => {
+        if (getDataSource() === 'api' && job._backend) {
+          return c.jobId === job.id;
+        }
         const jTitle = c.jobApplied;
         return jTitle === job.roleName || jTitle === job.cardName;
       });

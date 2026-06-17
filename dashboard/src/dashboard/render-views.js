@@ -9,6 +9,7 @@ import { openCandidateReport } from './report.js';
 import { soundEngine } from './sound.js';
 import { showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
+import { getDataSource } from './api.js';
 
 // ==========================================
 // RENDERING & INTERACTIVE VIEWS
@@ -670,7 +671,12 @@ function applyDateRangeGlobally() {
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (activeJob) {
     const jobCandidates = filterCandidatesByDateRange(
-      AppState.candidates.filter(c => c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName)
+      AppState.candidates.filter(c => {
+        if (getDataSource() === 'api' && activeJob._backend) {
+          return c.jobId === activeJob.id;
+        }
+        return c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName;
+      })
     );
     drawFunnelSVG(activeJob, jobCandidates);
     drawScoreDistributionSVG(activeJob, jobCandidates);

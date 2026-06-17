@@ -3,6 +3,7 @@ import { escapeHTML } from './escape.js';
 import { filterCandidatesByDateRange, renderAnalyticsTable, renderJobCards, updateSummaryMetrics } from './render-views.js';
 import { soundEngine } from './sound.js';
 import { AppState } from './state.js';
+import { getDataSource } from './api.js';
 
 // ==========================================
 // CREATIVE FEATURES ADDITIONAL LOGIC
@@ -11,7 +12,12 @@ import { AppState } from './state.js';
 function recalculateJobPipelines() {
   const dateFiltered = filterCandidatesByDateRange(AppState.candidates);
   AppState.jobs.forEach(job => {
-    const jobCandidates = dateFiltered.filter(c => c.jobApplied === job.roleName || c.jobApplied === job.cardName);
+    const jobCandidates = dateFiltered.filter(c => {
+      if (getDataSource() === 'api' && job._backend) {
+        return c.jobId === job.id;
+      }
+      return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+    });
 
     job.pipeline.total = jobCandidates.length;
     job.pipeline.resume = jobCandidates.filter(c => c.status === 'Resume').length;

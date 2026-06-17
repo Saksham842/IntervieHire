@@ -80,9 +80,12 @@ function navigateToJobDetail(jobId) {
   document.querySelectorAll('.jd-pane').forEach(p => p.classList.remove('active'));
   document.getElementById('jd-pane-overview').classList.add('active');
 
-  const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(
-    c => c.jobApplied === job.roleName || c.jobApplied === job.cardName
-  );
+  const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
+    if (isApiMode() && job._backend) {
+      return c.jobId === job.id;
+    }
+    return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+  });
 
   renderFunnelStages(job);
   renderFunnelInsights(job);
@@ -121,9 +124,12 @@ async function hydrateBackendApplicants(job) {
   renderFunnelStages(job);
   renderFunnelInsights(job);
   renderJobDetailPanes(job);
-  const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(
-    (c) => c.jobApplied === job.roleName || c.jobApplied === job.cardName,
-  );
+  const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
+    if (isApiMode() && job._backend) {
+      return c.jobId === job.id;
+    }
+    return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+  });
   requestAnimationFrame(() => {
     drawFunnelSVG(job, jobCandidates);
     drawScoreDistributionSVG(job, jobCandidates);

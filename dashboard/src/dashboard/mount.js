@@ -18,7 +18,7 @@ import { soundEngine } from './sound.js';
 import { initSourcing, navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { renderSpotlightResults, SpotlightCommands, spotlightUi, toggleSpotlightModal } from './spotlight.js';
 import { AppState, generateJobId } from './state.js';
-import { apiCreateJob, apiPatchJobParameters, isApiMode } from './api.js';
+import { apiCreateJob, apiPatchJobParameters, isApiMode, getDataSource } from './api.js';
 
 // ==========================================
 // COMPONENT MOUNT BINDINGS
@@ -285,9 +285,19 @@ function initMountBindings() {
         const idx = AppState.jobs.findIndex(j => j.id === jobId);
         if (idx === -1) break;
         const removedJob = AppState.jobs[idx];
-        const removedCandidates = AppState.candidates.filter(c => c.jobApplied === job.roleName || c.jobApplied === job.cardName);
+        const removedCandidates = AppState.candidates.filter(c => {
+          if (getDataSource() === 'api' && job._backend) {
+            return c.jobId === job.id;
+          }
+          return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+        });
         AppState.jobs.splice(idx, 1);
-        AppState.candidates = AppState.candidates.filter(c => c.jobApplied !== job.roleName && c.jobApplied !== job.cardName);
+        AppState.candidates = AppState.candidates.filter(c => {
+          if (getDataSource() === 'api' && job._backend) {
+            return c.jobId !== job.id;
+          }
+          return c.jobApplied !== job.roleName && c.jobApplied !== job.cardName;
+        });
         saveStateToLocalStorage();
         const restoreJob = () => {
           AppState.jobs.splice(Math.min(idx, AppState.jobs.length), 0, removedJob);
@@ -951,9 +961,12 @@ function initMountBindings() {
     if (AppState.activeTab === 'job-detail' && AppState.activeJobId) {
       const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
       if (activeJob) {
-        const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(
-          c => c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName
-        );
+        const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
+          if (getDataSource() === 'api' && activeJob._backend) {
+            return c.jobId === activeJob.id;
+          }
+          return c.jobApplied === activeJob.roleName || c.jobApplied === activeJob.cardName;
+        });
         drawFunnelSVG(activeJob, jobCandidates);
         drawScoreDistributionSVG(activeJob, jobCandidates);
       }
@@ -1035,9 +1048,12 @@ function initMountBindings() {
       if (AppState.activeJobId) {
         const job = AppState.jobs.find(j => j.id === AppState.activeJobId);
         if (job) {
-          const jobCandidates = AppState.candidates.filter(
-            c => c.jobApplied === job.roleName || c.jobApplied === job.cardName
-          );
+          const jobCandidates = AppState.candidates.filter(c => {
+            if (getDataSource() === 'api' && job._backend) {
+              return c.jobId === job.id;
+            }
+            return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+          });
           drawScoreDistributionSVG(job, jobCandidates);
         }
       }
