@@ -66,6 +66,25 @@ export async function apiFetchApplicants(jobId, tab = 'functional') {
   const list = Array.isArray(data) ? data : (data?.applicants || data?.data || []);
   return list.map(mapApplicantOutToCandidate);
 }
+// Persist added candidates to the backend (api mode) so they survive refetch —
+// without this the dashboard only pushed to local AppState and they vanished on
+// the next hydrate. Backend requires a valid EmailStr per applicant, so each
+// email is sanitised with a stable placeholder fallback (one blank row can't
+// 422 the whole batch). Returns the mapped, backend-id'd candidates.
+export async function apiAddApplicantsBulk(jobId, candidates) {
+  const isEmail = (e) => typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+  const slug = (n) => ((n || 'candidate').toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/(^\.|\.$)/g, '').slice(0, 40) || 'candidate');
+  const applicants = (candidates || []).map((c, i) => ({
+    name: (c.name && String(c.name).trim()) || 'Unnamed Candidate',
+    email: isEmail(c.email) ? c.email : `${slug(c.name)}.${i}@placeholder.interviehire.com`,
+    phone: c.phone || null,
+    source: 'bulk_upload',
+  }));
+  if (!applicants.length) return [];
+  const data = await request(`/jobs/${jobId}/applicants/bulk`, { method: 'POST', body: { applicants } });
+  const list = Array.isArray(data) ? data : (data?.applicants || data?.data || []);
+  return list.map(mapApplicantOutToCandidate);
+}
 // Deep Analysis source: the full canonical CandidateReport, or null until the
 // engine has scored the interview (Deep Analysis then shows its pending state).
 export async function apiFetchCandidateReport(applicantId) {

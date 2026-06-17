@@ -1,5 +1,6 @@
 import { document, window, requestAnimationFrame, setTimeout, setInterval, clearInterval } from './runtime.js';
 import { escapeHTML } from './escape.js';
+import { isApiMode, apiAddApplicantsBulk } from './api.js';
 import { navigateToJobDetail } from './job-detail.js';
 import { appendTerminalLog, recalculateJobPipelines, renderKanbanBoard } from './kanban-swarm.js';
 import { navigateToTab, openDrawer } from './navigation.js';
@@ -604,6 +605,21 @@ function importCsvCandidates() {
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (!activeJob) return;
 
+  // API mode: persist to the backend so candidates survive refetch.
+  if (isApiMode() && activeJob._backend) {
+    persistCandidatesToBackend(activeJob, csvParsedCandidates.slice());
+    csvParsedCandidates = [];
+    const previewBox = document.getElementById('csv-preview-box');
+    if (previewBox) previewBox.style.display = 'none';
+    const fileCsvEl = document.getElementById('input-file-csv');
+    if (fileCsvEl) fileCsvEl.value = '';
+    const dz = document.getElementById('dropzone-csv');
+    if (dz) dz.style.display = '';
+    const ft = dz ? dz.parentElement.querySelector('.sourcing-panel-footer') : null;
+    if (ft) ft.style.display = '';
+    return;
+  }
+
   csvParsedCandidates.forEach(cand => {
     addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob);
   });
@@ -1054,6 +1070,15 @@ function importManualQueue() {
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (!activeJob) return;
 
+  // API mode: persist to the backend so candidates survive refetch (the local
+  // path below only pushed to AppState and vanished on the next hydrate).
+  if (isApiMode() && activeJob._backend) {
+    persistCandidatesToBackend(activeJob, sourcingQueue.slice());
+    sourcingQueue = [];
+    renderManualQueue();
+    return;
+  }
+
   sourcingQueue.forEach(cand => {
     addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob);
   });
@@ -1121,6 +1146,24 @@ function addCandidateToAppState(name, email, phone, job, resumeText) {
   }
 
   return candId;
+}
+
+// API-mode persistence for imported candidates. POSTs the batch to the backend,
+// then re-opens the job so hydrateBackendApplicants pulls the canonical list
+// (including the new rows) — this is what makes added candidates actually stay.
+function persistCandidatesToBackend(job, candidates) {
+  const n = (candidates || []).length;
+  if (!n) return;
+  showPremiumToast(`Saving ${n} candidate${n !== 1 ? 's' : ''} to "${escapeHTML(job.roleName)}"…`, 'success');
+  apiAddApplicantsBulk(job.id, candidates)
+    .then((saved) => {
+      soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
+      showPremiumToast(`Imported ${saved.length || n} candidate(s) into "${escapeHTML(job.roleName)}".`, 'success');
+      navigateToJobDetail(job.id);
+    })
+    .catch((err) => {
+      showPremiumToast(`Couldn't save candidates: ${(err && err.message) || 'backend error'}`, 'error');
+    });
 }
 
 function showPremiumToast(message, type = 'success', action = null) {
