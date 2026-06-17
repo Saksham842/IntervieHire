@@ -156,6 +156,7 @@ export default function DashboardShell({ children }) {
 
     const firstName = label.split(/\s+/)[0] || label;
     window.IH_USER_NAME = firstName;
+    window.IH_ORG_NAME = (user.organisation_name || '').trim();
 
     // Personalise the "Created By" defaults so they show the signed-in user.
     const creatorInput = document.getElementById('job-creator-input');

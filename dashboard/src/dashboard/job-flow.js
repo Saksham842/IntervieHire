@@ -423,7 +423,9 @@ function renderJobFlowConfig(job, stageKey) {
 
 function getVerboseJobDescription(job) {
   const role = job.roleName || 'This role';
-  const company = job.companyName || 'IntervieHire';
+  // The company is the org that posted the JD — job.companyName (org from the
+  // backend), else the signed-in recruiter's org. Never the platform name.
+  const company = job.companyName || globalThis.IH_ORG_NAME || 'the company';
   const normalizedRole = role.toLowerCase();
   const consultingName = company.toLowerCase().includes('consulting') ? company : `${company} Consulting`;
 
@@ -497,7 +499,7 @@ function getVerboseJobDescription(job) {
 
 function renderVerboseJobDescription(job) {
   const content = getVerboseJobDescription(job);
-  const company = escapeHTML(job.companyName || 'IntervieHire');
+  const company = escapeHTML(job.companyName || globalThis.IH_ORG_NAME || 'the company');
   const location = escapeHTML(job.location || 'Delhi, India');
   const role = escapeHTML(job.cardName || job.roleName || 'Untitled Role');
   const roleName = escapeHTML(job.roleName || 'Untitled Role');
