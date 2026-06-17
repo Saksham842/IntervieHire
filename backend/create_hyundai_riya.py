@@ -16,7 +16,7 @@ from app.utils.auth import get_password_hash
 ORG_NAME = "Hyundai"
 USER_NAME = "Riya"
 USER_EMAIL = "riya@hyundai.com"
-USER_PASSWORD = "New Thinking. New Possibilities"
+USER_PASSWORD = "hellohyundai"
 
 
 def run():
