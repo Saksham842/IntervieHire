@@ -18,6 +18,7 @@ import { soundEngine } from './sound.js';
 import { initSourcing, navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { renderSpotlightResults, SpotlightCommands, spotlightUi, toggleSpotlightModal } from './spotlight.js';
 import { AppState, generateJobId } from './state.js';
+import { apiCreateJob, apiPatchJobParameters, isApiMode } from './api.js';
 
 // ==========================================
 // COMPONENT MOUNT BINDINGS
@@ -571,6 +572,50 @@ function initMountBindings() {
       const addResume = document.getElementById('chk-resume').checked;
       const addScreening = document.getElementById('chk-screening').checked;
       const addFunctional = document.getElementById('chk-functional').checked;
+
+      // API mode: persist the job to the backend so it survives refetches
+      // (the local-only path below would vanish on the next GET /api/jobs).
+      if (isApiMode()) {
+        const submitBtn = createJobForm.querySelector('button[type="submit"]') || e.submitter;
+        const origBtnHTML = submitBtn ? submitBtn.innerHTML : '';
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = 'Creating job…'; }
+        let created;
+        try {
+          created = await apiCreateJob({
+            cardName, roleName, experienceBand: expBand, customJobId: customId,
+            status: 'draft', description: description || 'No job description provided.',
+            pipelineConfig: {
+              resumeAnalysis: { enabled: addResume },
+              recruiterScreening: { enabled: addScreening },
+              functionalInterview: { enabled: addFunctional },
+            },
+          });
+        } catch (err) {
+          console.error('Backend job create failed:', err);
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHTML; }
+          showPremiumToast(`Could not create job: ${err.message}`, 'error');
+          return;
+        }
+        AppState.jobs.push(created);
+        saveStateToLocalStorage();
+        // Enrich with AI and persist the blueprint so the draft is reviewable.
+        if (description) {
+          if (submitBtn) submitBtn.innerHTML = 'Generating interview pipeline…';
+          try {
+            await enrichJobWithAI(created, description);
+            await apiPatchJobParameters(created.id, created);
+          } catch (err) {
+            console.error('Job enrichment/persist failed:', err);
+          }
+        }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHTML; }
+        closeDrawers();
+        createJobForm.reset();
+        showPremiumToast(`Created job card "${roleName}" as Draft.`, 'success');
+        soundEngine.playChime([261.63, 329.63, 392.00, 523.25], 0.2, 0.08);
+        openJobFlowView(created.id, true);
+        return;
+      }
 
       let totalApplicants = 0;
       let resumeVal = 0;

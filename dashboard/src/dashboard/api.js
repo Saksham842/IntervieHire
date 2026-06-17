@@ -39,6 +39,22 @@ export async function apiFetchJobs() {
 export async function apiFetchJob(id) {
   return mapJobOutToJob(await request(`/jobs/${id}`));
 }
+// Create a job on the backend (api mode) so it persists across refetches.
+// Returns the mapped job with its real backend id + organisation_name.
+export async function apiCreateJob(job) {
+  const body = {
+    title: job.cardName || job.roleName || 'Untitled Job',
+    role_name: job.roleName || job.cardName || 'Untitled Role',
+    experience_band: job.experienceBand || null,
+    custom_job_id: (job.customJobId && job.customJobId !== '-') ? job.customJobId : null,
+    status: job.status || 'draft',
+    resume_analysis_enabled: job.pipelineConfig?.resumeAnalysis?.enabled ?? true,
+    recruiter_screening_enabled: job.pipelineConfig?.recruiterScreening?.enabled ?? true,
+    functional_interview_enabled: job.pipelineConfig?.functionalInterview?.enabled ?? true,
+    description: job.description || null,
+  };
+  return mapJobOutToJob(await request('/jobs', { method: 'POST', body }));
+}
 // Persist the authored blueprint — the exact JobParametersIn shape the backend
 // + ai_sync.py consume (functional_parameters carries questionsDetailed).
 export async function apiPatchJobParameters(id, job) {
