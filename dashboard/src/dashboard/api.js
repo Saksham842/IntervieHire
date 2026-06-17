@@ -213,15 +213,29 @@ function mapInterviewStatus(s) {
   return map[k] || (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, ' '));
 }
 
+function mapSource(s) {
+  if (!s) return 'ATS';
+  const map = {
+    career_page: 'Career Page',
+    bulk_upload: 'Bulk Upload',
+    direct_link: 'Direct Link',
+    scheduled: 'Scheduled',
+    ats: 'ATS'
+  };
+  return map[String(s).toLowerCase()] || s;
+}
+
 function mapApplicantOutToCandidate(a = {}) {
+  const status = a.functional_status ? 'Functional' : (a.screening_status ? 'Screening' : 'Resume');
+  const rawInterviewStatus = status === 'Functional' ? a.functional_status : (status === 'Screening' ? a.screening_status : null);
   return {
     id: a.id,
     name: a.name || '',
     email: a.email || '',
     jobApplied: a.job_role_title || a.role_name || '',
-    status: a.functional_status === 'completed' ? 'Functional' : (a.screening_status === 'completed' ? 'Screening' : 'Resume'),
-    source: a.source || 'ATS',
-    interviewStatus: mapInterviewStatus(a.functional_status),
+    status: status,
+    source: mapSource(a.source),
+    interviewStatus: mapInterviewStatus(rawInterviewStatus),
     interviewScore: a.functional_score ?? a.overall_interview_score ?? null,
     cheatProbability: a.cheat_probability ? a.cheat_probability.charAt(0).toUpperCase() + a.cheat_probability.slice(1) : null,
     matchScore: a.match_score ?? null,
