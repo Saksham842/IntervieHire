@@ -33,6 +33,19 @@ function renderJobDetailPanes(job) {
     return true;
   });
 
+  const scoreColor = (score) => {
+    if (score == null) return '';
+    if (score >= 80) return 'score-green';
+    if (score >= 60) return 'score-yellow';
+    return 'score-red';
+  };
+
+  const screeningBadge = (val) => {
+    if (!val) return '—';
+    const cls = val === 'Good fit' ? 'fit-good' : val === 'Moderate fit' ? 'fit-moderate' : 'fit-poor';
+    return `<span class="screening-fit-badge ${cls}">${val}</span>`;
+  };
+
   // 1. Resume pane — criteria config + candidates table
   const resumeList = document.getElementById('list-stage-resume');
   if (resumeList) {
@@ -179,7 +192,7 @@ function renderJobDetailPanes(job) {
   // 2. Screening pane
   const screeningList = document.getElementById('list-stage-screening');
   if (screeningList) {
-    const screeningCands = jobCandidates.filter(c => c.status === 'Screening');
+    const screeningCands = jobCandidates.filter(c => c.status === 'Screening' || c.status === 'Functional' || c.status === 'Hired');
     if (screeningCands.length === 0) {
       screeningList.innerHTML = `
         <div class="jd-empty-pane">
@@ -240,12 +253,17 @@ function renderJobDetailPanes(job) {
                     </td>
                     <td>${c.phone ? escapeHTML(c.phone) : '—'}</td>
                     <td>${interviewStatusChip(c.interviewStatus)}</td>
-                    <td>—</td>
-                    <td>—</td>
+                    <td>${c.recruiterScreening ? screeningBadge(c.recruiterScreening) : '—'}</td>
+                    <td>${c.recruiterScreeningScore != null ? `<span class="interview-score-dot ${scoreColor(c.recruiterScreeningScore)}"></span> ${c.recruiterScreeningScore}` : '—'}</td>
                     <td>${hasReport ? `<a href="#" class="report-link" data-cand-id="${c.id}">Report <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '—'}</td>
                     <td><span class="source-badge">${sourceIcon} ${c.source || '—'}</span></td>
                     <td>${c.attemptedAt || '—'}</td>
-                    <td><button class="${actionClass}" data-candidate-id="${c.id}">${c.interviewStatus === 'Slot Missed' ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg> ' : '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line></svg> '}${actionLabel}</button></td>
+                    <td>
+                      ${(c.status === 'Functional' || c.status === 'Hired')
+                        ? `<span class="screening-completed-label" style="display:inline-flex;align-items:center;gap:4.8px;color:var(--color-gold,#2dd4bf);font-size:0.75rem;font-weight:600;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Completed</span>`
+                        : `<button class="${actionClass}" data-candidate-id="${c.id}">${c.interviewStatus === 'Slot Missed' ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg> ' : '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line></svg> '}${actionLabel}</button>`
+                      }
+                    </td>
                   </tr>
                 `;
               }).join('')}
@@ -279,24 +297,6 @@ function renderJobDetailPanes(job) {
         </div>
       `;
     } else {
-      const cheatColor = (prob) => {
-        if (prob === 'Low') return 'cheat-low';
-        if (prob === 'Medium') return 'cheat-medium';
-        if (prob === 'High') return 'cheat-high';
-        return '';
-      };
-      const scoreColor = (score) => {
-        if (score == null) return '';
-        if (score >= 80) return 'score-green';
-        if (score >= 60) return 'score-yellow';
-        return 'score-red';
-      };
-      const screeningBadge = (val) => {
-        if (!val) return '—';
-        const cls = val === 'Good fit' ? 'fit-good' : val === 'Moderate fit' ? 'fit-moderate' : 'fit-poor';
-        return `<span class="screening-fit-badge ${cls}">${val}</span>`;
-      };
-
       const allFunctionalCands = functionalCands;
       const displayFunctionalCands = applyStageFilters(functionalCands, 'functional');
       const ff = AppState.stageFilters.functional;

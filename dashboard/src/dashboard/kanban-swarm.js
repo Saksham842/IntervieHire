@@ -21,7 +21,7 @@ function recalculateJobPipelines() {
 
     job.pipeline.total = jobCandidates.length;
     job.pipeline.resume = jobCandidates.filter(c => c.status === 'Resume').length;
-    job.pipeline.screening = jobCandidates.filter(c => c.status === 'Screening').length;
+    job.pipeline.screening = jobCandidates.filter(c => c.status === 'Screening' || c.status === 'Functional' || c.status === 'Hired').length;
     job.pipeline.functional = jobCandidates.filter(c => c.status === 'Functional').length;
   });
 }
