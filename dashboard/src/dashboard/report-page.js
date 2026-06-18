@@ -8,7 +8,7 @@ import { getCandidateNextStage, getCandidateTranscriptLines } from './report.js'
 import { getScoringConfig } from './scoring-config.js';
 import { soundEngine } from './sound.js';
 import { AppState } from './state.js';
-import { getDataSource } from './api.js';
+import { getDataSource, apiUpdateApplicant } from './api.js';
 
 // ==========================================
 // CANDIDATE REPORT — FULL PAGE VIEW
@@ -616,7 +616,7 @@ async function openCandidateReportPage(candidateId) {
 
   const initials = candidate.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const score = overallScoreOf(candidate, analysis);
-  const decision = candidate.decision || 'Pending';
+  const decision = candidate.decision || '';
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: '▦' },
@@ -640,7 +640,7 @@ async function openCandidateReportPage(candidateId) {
         </div>
         <div class="rp-topbar-actions">
           <select class="rp-decision" id="rp-decision" title="Hiring decision">
-            ${['Pending', 'Shortlisted', 'On Hold', 'Rejected'].map(d => `<option value="${d}" ${decision === d ? 'selected' : ''}>${d}</option>`).join('')}
+            ${[['', 'Pending'], ['shortlisted', 'Shortlisted'], ['on_hold', 'On Hold'], ['rejected', 'Rejected'], ['hired', 'Hired']].map(([v, label]) => `<option value="${v}" ${decision === v ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
           <button class="rp-icon-btn" id="rp-print" title="Download / print report">⎙</button>
           <button class="rp-icon-btn" id="rp-share" title="Copy share link">⤴</button>
@@ -730,15 +730,21 @@ function bindReportPage(candidate, job, analysis, root) {
 
   // Topbar actions
   root.querySelector('#rp-decision')?.addEventListener('change', async (e) => {
-    candidate.decision = e.target.value;
+    const value = e.target.value || null; // null | shortlisted | on_hold | rejected | hired
+    candidate.decision = value;
     saveStateToLocalStorage();
     const { showPremiumToast } = await import('./sourcing.js');
-    if (e.target.value === 'Rejected') {
+    if (value === 'rejected') {
+      // Rejecting also moves the kanban card; updateCandidateStatus persists decision='rejected'.
       const { updateCandidateStatus } = await import('./job-detail-panes.js');
       updateCandidateStatus(candidate.id, 'Rejected');
       showPremiumToast(`${candidate.name} marked as Rejected.`, 'info');
     } else {
-      showPremiumToast(`Decision updated to ${e.target.value}.`, 'success');
+      if (candidate._backend && getDataSource() === 'api') {
+        apiUpdateApplicant(candidate.id, { decision: value }).catch((err) =>
+          console.warn('Decision saved locally but backend sync failed:', err));
+      }
+      showPremiumToast('Decision updated.', 'success');
     }
   });
   root.querySelector('#rp-print')?.addEventListener('click', () => window.print());
@@ -784,6 +790,10 @@ function bindReportPage(candidate, job, analysis, root) {
   root.querySelector('#rp-notes-area')?.addEventListener('blur', (e) => {
     candidate.recruiterNotes = e.target.value;
     saveStateToLocalStorage();
+    if (candidate._backend && getDataSource() === 'api') {
+      apiUpdateApplicant(candidate.id, { remarks: e.target.value }).catch((err) =>
+        console.warn('Notes saved locally but backend sync failed:', err));
+    }
     const saved = root.querySelector('#rp-notes-saved');
     if (saved) { saved.textContent = 'Saved ✓'; setTimeout(() => { saved.textContent = 'Notes save automatically when you click away.'; }, 2000); }
   });

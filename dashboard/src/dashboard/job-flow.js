@@ -2,6 +2,7 @@ import { document, setTimeout } from './runtime.js';
 import { escapeHTML } from './escape.js';
 import { EXPERIENCE_BANDS, DIFFICULTY_LEVELS } from './constants.js';
 import { saveStateToLocalStorage } from './ai-api.js';
+import { scheduleJobSave } from './api.js';
 import { navigateToJobDetail } from './job-detail.js';
 import { recalculateJobPipelines } from './kanban-swarm.js';
 import { navigateToTab, openDrawer } from './navigation.js';
@@ -872,6 +873,7 @@ function renderResumeAnalysisFlowConfig(job, panel) {
     job.resumeCriteria = next;
     panel.dataset.raEditing = 'false';
     saveStateToLocalStorage();
+    scheduleJobSave(job);
     showPremiumToast('Resume analysis rules saved.', 'success');
     renderResumeAnalysisFlowConfig(job, panel);
     renderJobFlowPipeline(job);
