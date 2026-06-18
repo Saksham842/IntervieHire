@@ -1,8 +1,16 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
 from typing import Optional, List
+
+# Auth cookie policy. Local dev: SameSite=Lax, insecure (same-site http).
+# Cross-site production (dashboard on Vercel, backend on Render) needs
+# SameSite=None + Secure so the cookie is sent on cross-origin requests.
+# Set COOKIE_SAMESITE=none and COOKIE_SECURE=true in the backend's prod env.
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax")
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 from app.database import get_db
 from app.models.user import User, UserStatus, UserType
@@ -91,8 +99,8 @@ def signup(data: SignupIn, response: Response, db: Session = Depends(get_db)):
         value=access_token,
         httponly=True,
         max_age=7 * 24 * 60 * 60,  # 7 days
-        samesite="lax",
-        secure=False,
+        samesite=COOKIE_SAMESITE,
+        secure=COOKIE_SECURE,
         path="/",
     )
 
@@ -139,8 +147,8 @@ def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
         value=access_token,
         httponly=True,
         max_age=7 * 24 * 60 * 60,  # 7 days
-        samesite="lax",
-        secure=False,
+        samesite=COOKIE_SAMESITE,
+        secure=COOKIE_SECURE,
         path="/",
     )
 
@@ -155,8 +163,8 @@ def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
                 value=str(first_org.id),
                 httponly=True,
                 max_age=7 * 24 * 60 * 60,
-                samesite="lax",
-                secure=False,
+                samesite=COOKIE_SAMESITE,
+                secure=COOKIE_SECURE,
                 path="/",
             )
 
@@ -288,8 +296,8 @@ def switch_context(data: SwitchContextIn, response: Response, current_user: User
         value=str(org.id),
         httponly=True,
         max_age=7 * 24 * 60 * 60,
-        samesite="lax",
-        secure=False,
+        samesite=COOKIE_SAMESITE,
+        secure=COOKIE_SECURE,
         path="/",
     )
 

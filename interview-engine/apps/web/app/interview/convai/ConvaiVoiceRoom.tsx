@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { API_URL, parseApiResponse } from '@/lib/api';
+import { useTranscript } from '@/hooks/useTranscript';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Convai voice/avatar interview room (additive — does not touch /interview).
@@ -54,7 +55,9 @@ export default function ConvaiVoiceRoom() {
   const [evaluating, setEvaluating] = useState(false);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [status, setStatus] = useState('');
+  const [transcriptReady, setTranscriptReady] = useState(false);
 
+  const transcript = useTranscript(sessionId);
   const configured = Boolean(CONVAI_API_KEY && CONVAI_CHARACTER_ID);
 
   // Initialise the Convai client once, client-side only (SDK touches navigator,
@@ -85,7 +88,12 @@ export default function ConvaiVoiceRoom() {
             if (response?.hasUserQuery?.()) {
               const q = response.getUserQuery?.();
               const t = typeof q === 'string' ? q : q?.getTextData?.();
-              if (t) setDraft(t);
+              if (t) {
+                setDraft(t);
+                // Capture candidate speech-to-text as it is recognised (interim).
+                const isFinal = q?.getIsFinal?.() ?? false;
+                transcript.recordEvent({ speaker: 'candidate', text: t, source: 'convai', isFinal });
+              }
             }
           } catch {
             /* getter shape varies by SDK version — confirmed on live run. */
@@ -114,10 +122,12 @@ export default function ConvaiVoiceRoom() {
     try {
       const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start`, { method: 'POST' });
       const json = await parseApiResponse<any>(res);
+      transcript.markStart();
       const first = json?.initialQuestion;
       if (first) {
         setMessages([{ speaker: 'ai', text: first }]);
         speakQuestion(first);
+        transcript.recordEvent({ speaker: 'interviewer', text: first, source: 'manual' });
       }
       setStarted(true);
       setStatus('Interview started. Hold “Speak” to answer.');
@@ -143,6 +153,7 @@ export default function ConvaiVoiceRoom() {
     setBusy(true);
     setStatus('Submitting answer…');
     setMessages((cur) => [...cur, { speaker: 'candidate', text: answer }]);
+    transcript.recordEvent({ speaker: 'candidate', text: answer, source: 'convai', isFinal: true });
     setDraft('');
     try {
       const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/answers`, {
@@ -155,6 +166,7 @@ export default function ConvaiVoiceRoom() {
       if (next) {
         setMessages((cur) => [...cur, { speaker: 'ai', text: next }]);
         speakQuestion(next);
+        transcript.recordEvent({ speaker: 'interviewer', text: next, source: 'manual' });
       }
       setStatus('Answer saved.');
     } catch (err) {
@@ -169,6 +181,9 @@ export default function ConvaiVoiceRoom() {
     setStatus('Completing & evaluating…');
     try {
       try { convaiRef.current?.interrupt?.(); } catch { /* noop */ }
+      // Finalize the transcript (.txt) before completing/evaluating.
+      const fin = await transcript.finalize();
+      if (fin?.status === 'finalized' || fin?.status === 'empty') setTranscriptReady(true);
       await fetch(`${API_URL}/api/interview/sessions/${sessionId}/complete`, { method: 'POST' });
       const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/evaluate`, { method: 'POST' });
       const json = await parseApiResponse<any>(res);
@@ -265,6 +280,16 @@ export default function ConvaiVoiceRoom() {
       )}
 
       {status && <p className="text-xs text-slate-500">{status}</p>}
+
+      {transcriptReady && (
+        <a
+          href={transcript.downloadUrl()}
+          className="self-start rounded-2xl border border-cyan-300 bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-700"
+          download
+        >
+          ⬇ Download interview transcript (.txt)
+        </a>
+      )}
 
       {evaluation && (
         <pre className="overflow-auto rounded-2xl border bg-slate-900 p-4 text-xs text-slate-100">

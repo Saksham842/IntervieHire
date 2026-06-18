@@ -1,0 +1,28 @@
+# Cloudflare NAMED tunnel for the UE5 avatar — gives a STABLE public URL
+# (https://avatar.interviehire.com) instead of the rotating *.trycloudflare.com.
+#
+# Prereq: interviehire.com's DNS must be on Cloudflare (NS move) so the tunnel
+# can create the avatar.interviehire.com record. Then run, on the PC:
+#
+#   cloudflared tunnel login
+#   cloudflared tunnel create interviehire-avatar
+#   cloudflared tunnel route dns interviehire-avatar avatar.interviehire.com
+#   cloudflared tunnel --config <path-to-this-file> run interviehire-avatar
+#   # (optional) install as an always-on Windows service:
+#   cloudflared --config <path-to-this-file> service install
+#
+# `tunnel create` prints a Tunnel UUID and writes a credentials JSON to
+# %USERPROFILE%\.cloudflared\<UUID>.json — fill both in below.
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: C:\Users\AVIRAL PC\.cloudflared\REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  # The UE Pixel Streaming signalling player runs on :80 on this PC.
+  - hostname: avatar.interviehire.com
+    service: http://localhost:80
+    originRequest:
+      # Pixel Streaming uses WebSockets for signalling — keep them alive.
+      noTLSVerify: true
+  # Everything else 404s.
+  - service: http_status:404

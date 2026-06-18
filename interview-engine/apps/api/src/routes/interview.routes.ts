@@ -8,6 +8,7 @@ import path from 'node:path';
 import { buildVapiAssistantConfig } from '../services/vapi-config.service.js';
 import { processRecordingForSession, transcribeUploadedFile } from '../services/transcription.service.js';
 import { handleCandidateTranscript } from '../services/interview-conversation.service.js';
+import { ensureTranscriptMeta, finalizeTranscript } from '../services/transcript.service.js';
 
 type SpeechTranscriptSegment = {
   speaker: 'candidate';
@@ -247,19 +248,85 @@ export async function interviewRoutes(app: FastifyInstance) {
       where: { id: req.params.id },
       data: { status: 'IN_PROGRESS', startedAt: session.startedAt ?? new Date(), transcript: updatedTranscript as any },
     });
+    // Open the transcript metadata row (status: recording). We do NOT log the
+    // blueprint question here: in the Convai-driven room the avatar asks its own
+    // questions (captured via STT), and the backend-driven room records its own
+    // interviewer turns client-side — seeding here would inject a phantom line.
+    await ensureTranscriptMeta(req.params.id);
     return { session: updated, initialQuestion: firstQuestion };
   });
   app.get('/sessions/:id/vapi-config', async (req:any) => {
     const session = await prisma.interviewSession.findUniqueOrThrow({where:{id:req.params.id}, include:{company:true,jobRole:{include:{questions:true}}}});
     return buildVapiAssistantConfig({companyName:session.company.name, companyDescription:session.company.description || undefined, jobRole:session.jobRole.title, roleRequirements:session.jobRole.requirements, questions:session.jobRole.questions.map((q: { text: string })=>q.text), evaluationCriteria:session.jobRole.evaluationCriteria as any});
   });
-  app.post('/sessions/:id/complete', async (req:any) => prisma.interviewSession.update({where:{id:req.params.id}, data:{status:'COMPLETED', completedAt:new Date()}}));
+  app.post('/sessions/:id/complete', async (req:any) => {
+    const session = await prisma.interviewSession.update({ where: { id: req.params.id }, data: { status: 'COMPLETED', completedAt: new Date() } });
+    // Auto-finalize the transcript on completion. Best-effort: a failure here
+    // must not break the completion flow (the .txt can still be built on demand
+    // via POST /api/interviews/:id/transcript/finalize).
+    const transcript = await finalizeTranscript(req.params.id).catch((err) => {
+      app.log.error('Transcript finalize on complete failed', err);
+      return null;
+    });
+    return { session, transcript };
+  });
   app.post('/sessions/:id/answers', async (req:any, reply) => {
     const text = String(req.body?.text ?? '').trim();
     if (!text) return reply.code(400).send({ error: 'Answer text is required' });
 
     const ai = await handleCandidateTranscript(req.params.id, text, req.body?.metrics ?? {});
     return { answer: { text }, ai };
+  });
+
+  // Ingest a pasted interview transcript (e.g. copied from Convai's memory tab)
+  // and store it as session.transcript in the shape the evaluator expects
+  // ({speaker:'ai'|'candidate', text, questionIndex}). Tolerant of several paste
+  // formats: a {turns:[...]} / Convai {interaction:[...]} array, or raw text with
+  // "Speaker: line" prefixes (User/Candidate/You ↔ Character/Interviewer/AI).
+  app.post('/sessions/:id/transcript-text', async (req:any, reply) => {
+    const session = await prisma.interviewSession.findUnique({ where: { id: req.params.id } });
+    if (!session) return reply.code(404).send({ error: 'Session not found' });
+
+    const body = req.body ?? {};
+    const aiRe = /character|interviewer|assistant|^ai\b|\bai\b|lina|bot/i;
+    const candidateRe = /user|candidate|\byou\b|\bme\b|human|applicant/i;
+
+    function rawToTurns(): Array<{ speaker?: string; role?: string; text?: string; message?: string; content?: string }> {
+      if (Array.isArray(body.turns)) return body.turns;
+      if (Array.isArray(body.interaction)) return body.interaction; // Convai chatHistory shape
+      const text = typeof body.text === 'string' ? body.text : (typeof body === 'string' ? body : '');
+      if (!text.trim()) return [];
+      const lines = text.split(/\r?\n/);
+      const speakerRe = /^\s*([A-Za-z][A-Za-z ()/_-]{0,24}?)\s*[:\-–]\s*(.*)$/;
+      const turns: Array<{ speaker: string; text: string }> = [];
+      for (const line of lines) {
+        const m = line.match(speakerRe);
+        if (m && (aiRe.test(m[1]) || candidateRe.test(m[1]))) {
+          turns.push({ speaker: m[1], text: m[2] });
+        } else if (line.trim() && turns.length) {
+          turns[turns.length - 1].text += ' ' + line.trim();
+        }
+      }
+      return turns;
+    }
+
+    const normalized: Array<{ speaker: 'ai' | 'candidate'; text: string; questionIndex: number; timestamp: string }> = [];
+    let qi = -1;
+    for (const t of rawToTurns()) {
+      const who = String(t.speaker ?? t.role ?? '');
+      const txt = String(t.text ?? t.message ?? t.content ?? '').trim();
+      if (!txt) continue;
+      const speaker: 'ai' | 'candidate' = aiRe.test(who) ? 'ai' : candidateRe.test(who) ? 'candidate' : 'candidate';
+      if (speaker === 'ai') qi += 1;
+      normalized.push({ speaker, text: txt, questionIndex: Math.max(0, qi), timestamp: new Date().toISOString() });
+    }
+
+    if (!normalized.length) {
+      return reply.code(400).send({ error: 'Could not parse any interview turns. Paste the conversation with "Speaker: text" lines, or send a {turns:[{speaker,text}]} array.' });
+    }
+
+    await prisma.interviewSession.update({ where: { id: req.params.id }, data: { transcript: normalized as any } });
+    return { ok: true, turns: normalized.length, transcript: normalized };
   });
   app.post('/sessions/:id/evaluate', async (req:any) => {
     try {

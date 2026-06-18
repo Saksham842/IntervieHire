@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { callDeepSeekJson } from './deepseek.service.js';
 import { getEffectiveQuestions } from './effective-questions.js';
+import { recordEventSafe } from './transcript.service.js';
 
 // Adaptive interviewer: after each answer an LLM "director" decides whether to
 // probe the same question once more or advance to the next prepared question.
@@ -222,6 +223,12 @@ export async function handleCandidateTranscript(
     where: { id: sessionId },
     data: { transcript, status: 'IN_PROGRESS' },
   });
+
+  // Server-side auto-capture into the transcript event log. This is the safety
+  // net: the transcript is complete even if every frontend STT event fails.
+  // Overlap with frontend-captured events is removed by the finalizer's dedupe.
+  await recordEventSafe(sessionId, 'candidate', text, 'manual');
+  await recordEventSafe(sessionId, 'interviewer', aiText, 'manual');
 
   return { text: aiText, interviewPhase, emotionState };
 }

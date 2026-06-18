@@ -9,6 +9,7 @@ import multipart from '@fastify/multipart';
 import { assistantRoutes } from './routes/assistant.routes.js';
 import { companyRoutes } from './routes/company.routes.js';
 import { interviewRoutes } from './routes/interview.routes.js';
+import { transcriptRoutes } from './routes/transcript.routes.js';
 import { registerWebsocket } from './websocket/gateway.js';
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -22,6 +23,7 @@ await app.register(websocket);
 app.get('/health', async () => ({ ok: true, service: 'interviehire-api' }));
 await app.register(companyRoutes, { prefix: '/api/company' });
 await app.register(interviewRoutes, { prefix: '/api/interview' });
+await app.register(transcriptRoutes, { prefix: '/api/interviews' });
 await app.register(assistantRoutes, { prefix: '/api/assistant' });
 await registerWebsocket(app);
 

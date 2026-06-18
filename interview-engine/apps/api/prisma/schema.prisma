@@ -130,6 +130,42 @@ model InterviewSession {
   candidate      Candidate      @relation(fields: [candidateId], references: [id], onDelete: Cascade)
   jobRole        JobRole        @relation(fields: [jobRoleId], references: [id], onDelete: Cascade)
   proctoringLogs ProctoringLog[]
+  transcriptEvents TranscriptEvent[]
+  transcriptMeta   InterviewTranscript?
+}
+
+// Append-only event log for the live interview transcript. Every utterance
+// fragment (candidate or interviewer, from any source) is written here as it
+// happens, so a transcript survives network blips, partial STT and an interview
+// that ends unexpectedly. The finalizer reads these to build the .txt file.
+model TranscriptEvent {
+  id          String           @id @default(cuid())
+  sessionId   String
+  speaker     String           // 'candidate' | 'interviewer'
+  text        String
+  timestampMs Int              // milliseconds relative to interview start
+  source      String           // 'convai' | 'browser_stt' | 'whisper' | 'manual'
+  isFinal     Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, timestampMs])
+}
+
+// One row per session: metadata about the finalized .txt transcript.
+model InterviewTranscript {
+  id                 String           @id @default(cuid())
+  sessionId          String           @unique
+  candidateId        String?
+  interviewId        String?          // maps to the job role / blueprint id
+  transcriptFilePath String?
+  startedAt          DateTime?
+  endedAt            DateTime?
+  status             String           @default("recording") // recording | finalized | empty | failed
+  eventCount         Int              @default(0)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  session            InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 }
 
 model ProctoringLog {

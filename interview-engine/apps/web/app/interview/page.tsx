@@ -4,6 +4,7 @@ import { WS_URL, API_URL } from '@/lib/api';
 import { GazeCalibration } from '@/hooks/GazeCalibration';
 import { useProctoring } from '@/hooks/useProctoring';
 import { useSpeechMetrics } from '@/hooks/useSpeechMetrics';
+import { useTranscript } from '@/hooks/useTranscript';
 import { MonitorUp, ShieldCheck, Video } from 'lucide-react';
 import type { CalibrationResult } from '@/hooks/useGazeCalibration';
 import { roomStyles } from './roomStyles';
@@ -57,8 +58,20 @@ export default function Interview() {
   const [camOn, setCamOn] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
   const { markAiFinished } = useSpeechMetrics();
+  const transcript = useTranscript(sessionId);
   const wsRef = useRef<WebSocket | null>(null);
   const sessionStartedRef = useRef(false);
+  const [transcriptReady, setTranscriptReady] = useState(false);
+
+  // Post-interview report flow: the transcript is captured live (candidate via
+  // browser STT, interviewer via avatar tab-audio → Whisper), finalized to a
+  // .txt, and evaluated into the final report — no manual paste.
+  const [ended, setEnded] = useState(false);
+  const [reportStatus, setReportStatus] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+  const [report, setReport] = useState<any>(null);
+  const [avatarCapture, setAvatarCapture] = useState<'off' | 'on' | 'error'>('off');
+  const [avatarCaptureMsg, setAvatarCaptureMsg] = useState('');
 
   const avatarSrc = useMemo(() => withPixelStreamingParams(AVATAR_URL), []);
 
@@ -95,6 +108,7 @@ export default function Interview() {
       if (msg.type === 'ai_response') {
         setMessages((m) => [...m, { speaker: 'ai', text: msg.text }]);
         markAiFinished();
+        if (msg.text) transcript.recordEvent({ speaker: 'interviewer', text: msg.text, source: 'manual' });
       }
     };
     setSocket(ws);
@@ -186,6 +200,11 @@ export default function Interview() {
         startProctoringSession();
         await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start`, { method: 'POST' });
         startRecording();
+        // Begin transcript capture: mark t=0 and stream candidate speech via the
+        // browser Web Speech API (the interviewer text is captured from the
+        // pasted Convai memory transcript at the end and merged in).
+        transcript.markStart();
+        transcript.startBrowserSTT();
       } catch (err) {
         console.error('startSession failed', err);
       }
@@ -193,16 +212,55 @@ export default function Interview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calibration, socket]);
 
+  // Let the candidate enable interviewer-voice capture (a user gesture is
+  // required for tab-audio sharing). They pick the interview tab and tick
+  // "Share tab audio" — that audio is the avatar's voice (the mic is not in it).
+  async function enableAvatarCapture() {
+    const r = await transcript.startAvatarCapture();
+    if (r.ok) {
+      setAvatarCapture('on');
+      setAvatarCaptureMsg('Interviewer voice is being recorded for transcription.');
+    } else {
+      setAvatarCapture('error');
+      setAvatarCaptureMsg(r.reason || 'Could not start interviewer audio capture.');
+    }
+  }
+
+  // End → stop all capture, transcribe the avatar audio, finalize the .txt,
+  // complete the session, and evaluate into the report. Fully automatic.
   async function endCall() {
+    setEnded(true);
+    setReportBusy(true);
     try {
       recorderRef.current?.stop();
-      // Stop proctoring + finalise the integrity score, then persist + evaluate.
+      transcript.stopBrowserSTT();
+      void transcript.flush();
       endProctoringSession();
+
+      setReportStatus('Transcribing interviewer audio…');
+      const audioRes = await transcript.stopAvatarCapture();
+      if (audioRes?.error) setReportStatus(audioRes.error);
+
+      setReportStatus('Building transcript…');
+      const fin = await transcript.finalize();
+      if (fin?.status === 'finalized' || fin?.status === 'empty') setTranscriptReady(true);
+
       await fetch(`${API_URL}/api/interview/sessions/${sessionId}/complete`, { method: 'POST' });
-      await fetch(`${API_URL}/api/interview/sessions/${sessionId}/evaluate`, { method: 'POST' });
-      setRecordingStatus('Session completed — you can close this tab.');
+
+      setReportStatus('Generating report from transcript…');
+      const eRes = await fetch(`${API_URL}/api/interviews/${sessionId}/report`, { method: 'POST' });
+      const eJson = await eRes.json();
+      if (eRes.ok && eJson?.evaluation) {
+        setReport(eJson.evaluation);
+        setReportStatus(`Report generated (engine: ${eJson.engine}).`);
+      } else {
+        setReportStatus(eJson?.error || 'Report generation failed.');
+      }
     } catch (err) {
       console.error('endCall failed', err);
+      setReportStatus(err instanceof Error ? err.message : 'Could not generate the report.');
+    } finally {
+      setReportBusy(false);
     }
   }
 
@@ -444,6 +502,18 @@ export default function Interview() {
             </button>
           </div>
           <div className="control-actions">
+            <button
+              type="button"
+              title={avatarCapture === 'on' ? avatarCaptureMsg : 'Capture the interviewer’s voice for the transcript (share this tab with audio)'}
+              onClick={enableAvatarCapture}
+              disabled={avatarCapture === 'on'}
+              style={{
+                fontSize: 12, fontWeight: 700,
+                color: avatarCapture === 'on' ? '#34d399' : avatarCapture === 'error' ? '#f87171' : undefined,
+              }}
+            >
+              {avatarCapture === 'on' ? '🎧 Interviewer ✓' : '🎧 Capture interviewer'}
+            </button>
             <button type="button" title="Microphone" onClick={toggleMic} className={micOn ? '' : 'muted'}>
               {micOn ? '🎙' : '🔇'}
             </button>
@@ -455,6 +525,104 @@ export default function Interview() {
             </button>
           </div>
         </footer>
+
+        {ended && (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 10000, display: 'grid', placeItems: 'center',
+              padding: 24, background: 'rgba(2,6,14,0.82)', backdropFilter: 'blur(6px)',
+            }}
+          >
+            <div
+              style={{
+                width: 'min(760px, 94vw)', maxHeight: '90vh', overflow: 'auto', color: '#e6edff',
+                background: 'linear-gradient(180deg,#0c1426,#080d1a)', border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 18, padding: '26px 28px', boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: '#7dd3fc' }}>
+                Interview complete
+              </p>
+              <h2 style={{ margin: '6px 0 4px', fontSize: 22, fontWeight: 800 }}>
+                {report ? 'Interview report' : 'Generating the interview report'}
+              </h2>
+
+              {!report ? (
+                <>
+                  <p style={{ margin: '0 0 14px', fontSize: 13.5, lineHeight: 1.6, color: '#9fb2d4' }}>
+                    The transcript was captured automatically — your speech via speech-to-text and the
+                    interviewer's voice from the interview audio — then transcribed and scored. No paste needed.
+                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+                    <span
+                      style={{
+                        display: 'inline-block', width: 16, height: 16, borderRadius: '50%',
+                        border: '2px solid rgba(125,211,252,0.35)', borderTopColor: '#7dd3fc',
+                        animation: reportBusy ? 'spin 0.8s linear infinite' : 'none', opacity: reportBusy ? 1 : 0,
+                      }}
+                    />
+                    <span style={{ fontSize: 13, color: '#9fb2d4' }}>{reportStatus || 'Working…'}</span>
+                    <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
+                  </div>
+                  {transcriptReady && (
+                    <a
+                      href={transcript.downloadUrl()}
+                      download
+                      style={{ display: 'inline-block', marginTop: 14, fontSize: 12.5, color: '#7dd3fc', textDecoration: 'underline' }}
+                    >
+                      ⬇ Download full interview transcript (.txt)
+                    </a>
+                  )}
+                </>
+              ) : (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
+                    <div style={{ flex: '1 1 160px', background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '14px 16px' }}>
+                      <p style={{ margin: 0, fontSize: 11, textTransform: 'uppercase', color: '#9fb2d4' }}>Overall</p>
+                      <p style={{ margin: '4px 0 0', fontSize: 30, fontWeight: 800 }}>
+                        {report.overallScore ?? '–'}<span style={{ fontSize: 14, color: '#7e90b2' }}>/100</span>
+                      </p>
+                    </div>
+                    <div style={{ flex: '1 1 160px', background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '14px 16px' }}>
+                      <p style={{ margin: 0, fontSize: 11, textTransform: 'uppercase', color: '#9fb2d4' }}>Recommendation</p>
+                      <p style={{ margin: '4px 0 0', fontSize: 16, fontWeight: 800, textTransform: 'capitalize' }}>
+                        {String(report.recommendation ?? '–').replace(/_/g, ' ')}
+                      </p>
+                    </div>
+                    {report.proctoringSummary && (
+                      <div style={{ flex: '1 1 160px', background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '14px 16px' }}>
+                        <p style={{ margin: 0, fontSize: 11, textTransform: 'uppercase', color: '#9fb2d4' }}>Proctoring</p>
+                        <p style={{ margin: '4px 0 0', fontSize: 14, fontWeight: 700 }}>
+                          {report.proctoringSummary.eventCount} events
+                          <span style={{ color: '#f87171' }}> · {report.proctoringSummary.criticalOrHighCount} high</span>
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {report.summary && (
+                    <p style={{ fontSize: 13.5, lineHeight: 1.65, color: '#c7d4ee' }}>{report.summary}</p>
+                  )}
+                  <details style={{ marginTop: 10 }}>
+                    <summary style={{ cursor: 'pointer', fontSize: 12.5, color: '#7dd3fc' }}>View full report JSON</summary>
+                    <pre style={{ marginTop: 8, maxHeight: 280, overflow: 'auto', fontSize: 11, lineHeight: 1.5, color: '#cbd5e1', background: 'rgba(0,0,0,0.35)', borderRadius: 10, padding: 12 }}>
+                      {JSON.stringify(report, null, 2)}
+                    </pre>
+                  </details>
+                  {transcriptReady && (
+                    <a
+                      href={transcript.downloadUrl()}
+                      download
+                      style={{ display: 'inline-block', marginTop: 12, fontSize: 12.5, color: '#7dd3fc', textDecoration: 'underline' }}
+                    >
+                      ⬇ Download full interview transcript (.txt)
+                    </a>
+                  )}
+                  <p style={{ marginTop: 12, fontSize: 12, color: '#9fb2d4' }}>{reportStatus} It also persists to the dashboard's Deep Analysis.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {showDebug && (
           <div className="debug-panel">
