@@ -14,6 +14,16 @@ export default function SignupPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const emailParam = params.get('email');
+      if (emailParam) {
+        setForm((f) => ({ ...f, email: emailParam }));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     if (!isAuthed()) return;
     let cancelled = false;
     apiMe()

@@ -8,9 +8,8 @@ logger = logging.getLogger(__name__)
 
 def send_html_email(to_email: str, subject: str, html_content: str) -> bool:
     if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
-        logger.warning(f"SMTP credentials not configured. Email to {to_email} will run in SIMULATION mode.")
-        print(f"\n==================== [SIMULATION EMAIL] ====================\nTo: {to_email}\nSubject: {subject}\n============================================================\n")
-        return True
+        logger.error(f"SMTP credentials not configured. Failed to send email to {to_email}.")
+        raise RuntimeError("SMTP credentials are not configured on the server. Please set SMTP_USERNAME and SMTP_PASSWORD.")
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
@@ -29,8 +28,8 @@ def send_html_email(to_email: str, subject: str, html_content: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error sending email to {to_email}: {e}")
-        logger.info(f"[FALLBACK SIMULATION EMAIL] To: {to_email}\nSubject: {subject}\nContent:\n{html_content}\n")
-        return True
+        raise e
+
 
 from datetime import datetime
 
@@ -354,24 +353,8 @@ def send_ical_invitation_email(
     ical_string = "\r\n".join(ical_lines)
 
     if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
-        box = f"""
-#################################################################
-# [SIMULATION iCAL CONFIRMATION]
-# Candidate: {candidate_name} ({candidate_email})
-# Stage: {stage_name} for {job_title}
-# Start Time: {start_time.strftime('%B %d, %Y at %I:%M %p UTC')}
-#
-# Interview Link:
-# {interview_link}
-#
-# Reschedule Link:
-# {reschedule_link}
-#################################################################
-"""
-        print(box)
-        logger.warning(f"SMTP credentials not configured. iCalendar Email to {candidate_email} will run in SIMULATION mode.")
-        print(f"\n==================== [SIMULATION iCAL EMAIL] ====================\nTo: {candidate_email}\nSubject: {subject}\n=================================================================\n")
-        return True
+        logger.error(f"SMTP credentials not configured. Failed to send iCalendar email to {candidate_email}.")
+        raise RuntimeError("SMTP credentials are not configured on the server. Please set SMTP_USERNAME and SMTP_PASSWORD.")
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
@@ -402,7 +385,8 @@ def send_ical_invitation_email(
         return True
     except Exception as e:
         logger.error(f"Error sending iCalendar email to {candidate_email}: {e}")
-        return False
+        raise e
+
 
 def send_reschedule_confirmation_email(candidate_name: str, candidate_email: str, job_title: str, stage_name: str, new_time_str: str) -> bool:
     # Deprecated/Fallback: Redirecting reschedules directly through multi-part RFC invites above
@@ -439,4 +423,122 @@ def send_reschedule_confirmation_email(candidate_name: str, candidate_email: str
     </html>
     """
     return send_html_email(candidate_email, subject, html)
+
+
+def send_team_invite_email(to_email: str, name: str, org_name: str, role: str, invite_link: str) -> bool:
+    subject = f"Invitation to join {org_name} on IntervieHire"
+    role_display = "Organisation Administrator" if role == "org_admin" else "Recruiter / Collaborator"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Join {org_name} on IntervieHire</title>
+        <style>
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background-color: #0b0f19;
+                color: #f3f4f6;
+                margin: 0;
+                padding: 40px 0;
+            }}
+            .card {{
+                max-width: 600px;
+                margin: 0 auto;
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(30, 41, 59, 0.8) 100%);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 16px;
+                padding: 40px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+            }}
+            h2 {{
+                color: #2dd4bf;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                padding-bottom: 15px;
+                margin-top: 0;
+                font-size: 24px;
+            }}
+            p {{
+                line-height: 1.6;
+                font-size: 15px;
+                color: #94a3b8;
+            }}
+            strong {{
+                color: #f3f4f6;
+            }}
+            .role-box {{
+                background: rgba(45, 212, 191, 0.05);
+                border-left: 4px solid #2dd4bf;
+                padding: 20px;
+                margin: 25px 0;
+                border-radius: 0 12px 12px 0;
+            }}
+            .role-label {{
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #94a3b8;
+                margin-bottom: 5px;
+            }}
+            .role-value {{
+                font-size: 18px;
+                font-weight: bold;
+                color: #f3f4f6;
+            }}
+            .btn-group {{
+                margin: 30px 0;
+                text-align: center;
+            }}
+            .btn {{
+                display: inline-block;
+                background: linear-gradient(135deg, #2dd4bf 0%, #64a0dc 100%);
+                color: #0a0a0a !important;
+                text-decoration: none;
+                padding: 14px 30px;
+                font-weight: bold;
+                border-radius: 8px;
+                margin: 10px;
+                text-align: center;
+            }}
+            .btn:hover {{
+                opacity: 0.95;
+            }}
+            .footer {{
+                font-size: 12px;
+                color: #64748b;
+                margin-top: 40px;
+                border-top: 1px solid rgba(255, 255, 255, 0.1);
+                padding-top: 20px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>Join {org_name} on IntervieHire</h2>
+            <p>Hello {name},</p>
+            <p>You have been invited to join <strong>{org_name}</strong> on <strong>IntervieHire</strong> — the AI-Powered Recruitment Platform.</p>
+            
+            <div class="role-box">
+                <div class="role-label">Your Role</div>
+                <div class="role-value">{role_display}</div>
+            </div>
+            
+            <p>To accept your invitation and set up your account, please click the button below:</p>
+            
+            <div class="btn-group">
+                <a href="{invite_link}" class="btn">Accept Invitation & Join Team</a>
+            </div>
+            
+            <p>Please make sure to sign up using your invited email address: <strong>{to_email}</strong>.</p>
+            
+            <div class="footer">
+                <p>This is an automated message from the IntervieHire Recruitment Platform.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return send_html_email(to_email, subject, html)
+
 

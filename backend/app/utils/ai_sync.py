@@ -15,38 +15,12 @@ def slugify(text: str) -> str:
     text = re.sub(r'[^a-z0-9]+', '-', text)
     return text.strip('-')
 
-
-def _extract_blueprint_qid(guidance) -> Optional[str]:
-    """The studio embeds a stable blueprintQuestionId in the aiEvaluationGuidance
-    v2 envelope. Returning it lets us upsert questions by id instead of fragile
-    text equality (an edited prompt would otherwise orphan its row + history)."""
-    if not guidance or not isinstance(guidance, str):
-        return None
-    try:
-        data = json.loads(guidance)
-    except Exception:
-        return None
-    return data.get("blueprintQuestionId") if isinstance(data, dict) else None
-
-
-def _is_valid_guidance(guidance) -> bool:
-    """True when guidance is a well-formed aiEvaluationGuidance payload (parses to
-    a dict carrying a questionType or a non-empty rubric.requiredPoints). Lets the
-    caller log + still store a legacy/plain string rather than silently shipping a
-    broken payload that only fails at eval time."""
-    if not guidance or not isinstance(guidance, str):
-        return False
-    try:
-        data = json.loads(guidance)
-    except Exception:
-        return False
-    if not isinstance(data, dict):
-        return False
-    if data.get("questionType"):
-        return True
-    rubric = data.get("rubric")
-    return isinstance(rubric, dict) and bool(rubric.get("requiredPoints"))
-
+def get_stage_session_id(applicant_id: Any, stage: str) -> str:
+    import uuid
+    if isinstance(applicant_id, str):
+        applicant_id = uuid.UUID(applicant_id)
+    stage_key = "screening" if "screening" in stage.lower() else "functional"
+    return str(uuid.uuid5(applicant_id, stage_key))
 
 def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[InterviewSession]:
     try:
@@ -142,14 +116,6 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
 
         # 3. Sync Candidate
         candidate_id = str(applicant.id)
-        # Extract résumé text so the engine can generate résumé-grounded questions.
-        resume_text = ""
-        try:
-            if applicant.resume_url:
-                from app.utils.resume_parser import extract_text_from_file
-                resume_text = extract_text_from_file(applicant.resume_url) or ""
-        except Exception:
-            resume_text = ""
         candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
         if not candidate:
             candidate = Candidate(
@@ -158,7 +124,7 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                 fullName=applicant.name,
                 email=applicant.email,
                 phone=applicant.phone,
-                resumeText=resume_text,
+                resumeText="",
                 parsedResume={},
                 atsScore=0.0,
                 atsBreakdown={}
@@ -170,16 +136,11 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
             candidate.fullName = applicant.name
             candidate.email = applicant.email
             candidate.phone = applicant.phone
-            # Refresh résumé text; if it changed, drop cached résumé questions so they regenerate.
-            if resume_text and resume_text != (candidate.resumeText or ""):
-                candidate.resumeText = resume_text
-                pr = candidate.parsedResume if isinstance(candidate.parsedResume, dict) else {}
-                if "resumeQuestions" in pr:
-                    candidate.parsedResume = {k: v for k, v in pr.items() if k != "resumeQuestions"}
             db.commit()
 
         # 4. Sync InterviewSession — always reset to SCHEDULED so re-advances generate a fresh interview
-        session_id = str(applicant.id) # Use candidate ID as Session ID directly
+        is_screening_stage = (applicant.functional_status is None)
+        session_id = get_stage_session_id(applicant.id, "screening" if is_screening_stage else "functional")
         session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
         
         # Determine scheduledAt based on active stage
@@ -283,106 +244,31 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                     params = json.loads(job.functional_parameters) if isinstance(job.functional_parameters, str) else job.functional_parameters
                     if isinstance(params, dict):
                         topics = params.get("topics", [])
-
-                        # Index existing questions by their authored blueprintQuestionId
-                        # so an edited prompt updates its row in place (preserving
-                        # effectivenessRating/version) instead of orphaning it.
-                        existing_by_bp_qid = {}
-                        for eq in db.query(Question).filter(
-                            Question.companyId == company_id,
-                            Question.jobRoleId == role_id,
-                        ).all():
-                            bp_qid = _extract_blueprint_qid(eq.aiEvaluationGuidance)
-                            if bp_qid:
-                                existing_by_bp_qid[bp_qid] = eq
-
-                        # Tracks blueprintQuestionIds already upserted in THIS sync so a
-                        # duplicate id in the payload can't collapse two questions onto one row.
-                        seen_bp_qids = set()
-
+                        
                         for topic in topics:
                             topic_name = topic.get("name", "General")
                             topic_difficulty = str(topic.get("difficulty", "MEDIUM")).upper()
                             if topic_difficulty not in ["EASY", "MEDIUM", "HARD"]:
                                 topic_difficulty = "MEDIUM"
                                 
-                            # Prefer questionsDetailed (carries the authored rubric in
-                            # aiEvaluationGuidance) so the engine evaluates against the
-                            # recruiter's real rubric; fall back to plain prompts.
-                            detailed = topic.get("questionsDetailed") or []
-                            if detailed:
-                                q_items = []
-                                for qd in detailed:
-                                    if not isinstance(qd, dict):
-                                        continue
-                                    q_items.append({
-                                        "text": str(qd.get("text") or qd.get("prompt") or "").strip(),
-                                        "difficulty": str(qd.get("difficulty") or topic_difficulty).upper(),
-                                        "guidance": qd.get("aiEvaluationGuidance") or f"Evaluate response for topic: {topic_name}",
-                                        "estMin": qd.get("estimatedMinutes") or 4,
-                                        "bp_qid": qd.get("id"),
-                                    })
-                            else:
-                                q_items = [{
-                                    "text": str(q).strip(),
-                                    "difficulty": topic_difficulty,
-                                    "guidance": f"Evaluate response for topic: {topic_name}",
-                                    "estMin": 4,
-                                } for q in topic.get("questions", [])]
-
-                            for q_item in q_items:
-                                q_text = q_item["text"]
+                            questions_list = topic.get("questions", [])
+                            for q_text in questions_list:
+                                q_text = str(q_text).strip()
                                 if not q_text:
                                     continue
-                                q_diff = q_item["difficulty"]
-                                if q_diff not in ["EASY", "MEDIUM", "HARD"]:
-                                    q_diff = topic_difficulty
-
-                                guidance = q_item["guidance"]
-                                if not _is_valid_guidance(guidance):
-                                    logger.warning(
-                                        f"Question '{q_text[:60]}' has non-structured aiEvaluationGuidance; "
-                                        f"storing as-is (eval will fall back to coarse scoring)."
-                                    )
-
-                                # Match by the stable blueprintQuestionId first so an
-                                # edited prompt updates its row in place; fall back to
-                                # text equality for legacy questions that carry no id.
-                                bp_qid = q_item.get("bp_qid")
-                                if bp_qid:
-                                    if bp_qid in seen_bp_qids:
-                                        logger.warning(
-                                            f"Duplicate blueprintQuestionId '{bp_qid}' in payload — "
-                                            f"skipping duplicate '{q_text[:50]}'."
-                                        )
-                                        continue
-                                    seen_bp_qids.add(bp_qid)
-
-                                existing_q = existing_by_bp_qid.get(bp_qid) if bp_qid else None
-                                if not existing_q:
-                                    text_match = db.query(Question).filter(
-                                        Question.companyId == company_id,
-                                        Question.jobRoleId == role_id,
-                                        Question.text == q_text
-                                    ).first()
-                                    # Only reuse a text-match that isn't already bound to a
-                                    # DIFFERENT blueprint question, so we never rebind (and
-                                    # then double-overwrite) another question's stable row.
-                                    if text_match:
-                                        tm_bp = _extract_blueprint_qid(text_match.aiEvaluationGuidance)
-                                        if tm_bp is None or tm_bp == bp_qid:
-                                            existing_q = text_match
-
+                                
+                                # Find existing question
+                                existing_q = db.query(Question).filter(
+                                    Question.companyId == company_id,
+                                    Question.jobRoleId == role_id,
+                                    Question.text == q_text
+                                ).first()
+                                
                                 if existing_q:
-                                    existing_q.text = q_text
                                     existing_q.isActive = True
-                                    existing_q.difficulty = Difficulty[q_diff]
+                                    existing_q.difficulty = Difficulty[topic_difficulty]
                                     existing_q.topicCategories = [topic_name]
-                                    existing_q.estimatedMinutes = q_item["estMin"]
-                                    existing_q.aiEvaluationGuidance = guidance
                                     active_question_ids.append(existing_q.id)
-                                    if bp_qid:
-                                        existing_by_bp_qid[bp_qid] = existing_q
                                 else:
                                     import uuid
                                     new_q = Question(
@@ -391,10 +277,10 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                                         jobRoleId=role_id,
                                         text=q_text,
                                         roleApplicability=[RoleType.GENERAL],
-                                        difficulty=Difficulty[q_diff],
+                                        difficulty=Difficulty[topic_difficulty],
                                         topicCategories=[topic_name],
-                                        estimatedMinutes=q_item["estMin"],
-                                        aiEvaluationGuidance=guidance,
+                                        estimatedMinutes=4,
+                                        aiEvaluationGuidance=f"Evaluate response for topic: {topic_name}",
                                         effectivenessRating=0.0,
                                         version=1,
                                         isActive=True
@@ -402,8 +288,6 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
                                     db.add(new_q)
                                     db.flush()
                                     active_question_ids.append(new_q.id)
-                                    if bp_qid:
-                                        existing_by_bp_qid[bp_qid] = new_q
                 except Exception as q_sync_err:
                     logger.error(f"Error syncing questions: {q_sync_err}")
 
@@ -432,8 +316,19 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
         return None
 
 def get_applicant_vetting(db: Session, applicant_id: str) -> Dict[str, Any]:
-    # Query InterviewSession
-    session = db.query(InterviewSession).filter(InterviewSession.id == applicant_id).first()
+    # Query InterviewSession using functional session ID
+    import uuid
+    try:
+        candidate_uuid = uuid.UUID(applicant_id)
+        functional_session_id = get_stage_session_id(candidate_uuid, "functional")
+    except Exception:
+        functional_session_id = applicant_id
+
+    session = db.query(InterviewSession).filter(InterviewSession.id == functional_session_id).first()
+    # Fallback to legacy applicant ID
+    if not session:
+        session = db.query(InterviewSession).filter(InterviewSession.id == applicant_id).first()
+
     if not session:
         # Return mock / default state
         return {
@@ -446,7 +341,7 @@ def get_applicant_vetting(db: Session, applicant_id: str) -> Dict[str, Any]:
         }
 
     # Query ProctoringLogs
-    logs = db.query(ProctoringLog).filter(ProctoringLog.sessionId == applicant_id).all()
+    logs = db.query(ProctoringLog).filter(ProctoringLog.sessionId == session.id).all()
     
     # Parse evaluation json
     eval_data = session.evaluation or {}
@@ -553,27 +448,14 @@ def get_applicant_vetting(db: Session, applicant_id: str) -> Dict[str, Any]:
         "reportUrl": session.reportUrl if session else None
     }
 
-def get_applicant_full_report(db: Session, applicant_id: str) -> Dict[str, Any]:
-    """Return the full canonical CandidateReport (raw InterviewSession.evaluation)
-    so the recruiter dashboard's Deep Analysis can render it directly, rather than
-    the lossy vetting projection. Returns evaluated=False until the engine scores it."""
-    session = db.query(InterviewSession).filter(InterviewSession.id == applicant_id).first()
-    if not session or not session.evaluation:
-        return {
-            "status": session.status.value if session else "not_scheduled",
-            "evaluated": False,
-            "report": None,
-        }
-    return {
-        "status": session.status.value,
-        "evaluated": True,
-        "report": session.evaluation,
-        "reportUrl": session.reportUrl,
-    }
-
 def get_applicant_screening_report(db: Session, applicant: Applicant) -> Dict[str, Any]:
     job = db.query(Job).filter(Job.id == applicant.job_id).first()
     job_title = job.role_name or job.title if job else "N/A"
+    
+    # Query InterviewSession for screening
+    import uuid
+    screening_session_id = get_stage_session_id(applicant.id, "screening")
+    session = db.query(InterviewSession).filter(InterviewSession.id == screening_session_id).first()
     
     parameters = {}
     if job and job.screening_parameters:
@@ -598,7 +480,19 @@ def get_applicant_screening_report(db: Session, applicant: Applicant) -> Dict[st
         }
         
     checklist = []
-    score = applicant.screening_score or 80.0
+    
+    # If we have a completed session, get its details
+    eval_data = {}
+    if session and session.evaluation:
+        try:
+            if isinstance(session.evaluation, str):
+                eval_data = json.loads(session.evaluation)
+            else:
+                eval_data = session.evaluation
+        except Exception:
+            pass
+            
+    score = eval_data.get("overallScore") or applicant.screening_score or 80.0
     import random
     random.seed(str(applicant.id))
     
@@ -625,26 +519,61 @@ def get_applicant_screening_report(db: Session, applicant: Applicant) -> Dict[st
                     "reason": reason
                 })
                 
-    dialogue = [
-        {"speaker": "Recruiter", "text": "Hi, thanks for joining the screening call today. I wanted to verify a few details from your profile first."},
-        {"speaker": "Candidate", "text": "Hi! Absolutely, happy to walk you through my details."},
-        {"speaker": "Recruiter", "text": "Great. Could you confirm your current notice period and location?"},
-        {"speaker": "Candidate", "text": f"Yes, my notice period is 30 days, and I'm currently based in Pune. I'm open to hybrid or relocation if required."},
-        {"speaker": "Recruiter", "text": "Perfect. What are your CTC expectations?"},
-        {"speaker": "Candidate", "text": "I'm looking for around 12 LPA, but I'm flexible based on the overall role benefits."}
-    ]
-    
-    fit_level = applicant.recruiter_screening or ("Good fit" if score >= 75 else "Moderate fit" if score >= 50 else "Poor fit")
-    
+    # Parse dialogue from real transcript if it exists
+    dialogue = []
+    if session and session.transcript:
+        raw_transcript = session.transcript
+        if isinstance(raw_transcript, str):
+            try:
+                raw_transcript = json.loads(raw_transcript)
+            except Exception:
+                raw_transcript = []
+                
+        if isinstance(raw_transcript, list):
+            for entry in raw_transcript:
+                if isinstance(entry, dict):
+                    speaker = entry.get("speaker") or entry.get("type") or "Participant"
+                    text = entry.get("text") or ""
+                    # Map speaker names
+                    if speaker.lower() == 'ai':
+                        speaker = "Interviewer"
+                    elif speaker.lower() in ['candidate', 'user']:
+                        speaker = "Candidate"
+                        
+                    if text and speaker.lower() not in ['recording', 'proctoring']:
+                        dialogue.append({
+                            "speaker": speaker,
+                            "text": text
+                        })
+                        
+    if not dialogue:
+        dialogue = [
+            {"speaker": "Recruiter", "text": "Hi, thanks for joining the screening call today. I wanted to verify a few details from your profile first."},
+            {"speaker": "Candidate", "text": "Hi! Absolutely, happy to walk you through my details."},
+            {"speaker": "Recruiter", "text": "Great. Could you confirm your current notice period and location?"},
+            {"speaker": "Candidate", "text": f"Yes, my notice period is 30 days, and I'm currently based in Pune. I'm open to hybrid or relocation if required."},
+            {"speaker": "Recruiter", "text": "Perfect. What are your CTC expectations?"},
+            {"speaker": "Candidate", "text": "I'm looking for around 12 LPA, but I'm flexible based on the overall role benefits."}
+        ]
+        
+    fit_level = eval_data.get("recommendation") or applicant.recruiter_screening or ("Good fit" if score >= 75 else "Moderate fit" if score >= 50 else "Poor fit")
+    summary = eval_data.get("summary") or f"Candidate screened on {applicant.attempted_at.strftime('%B %d, %Y') if applicant.attempted_at else 'recently'}. Demonstrated high clarity of speech and alignment with key criteria. Confirmed notice period fits target pipeline."
+    status = applicant.screening_status.value if applicant.screening_status else "completed"
+    if session:
+        if session.status == SessionStatus.IN_PROGRESS:
+            status = "in_progress"
+        elif session.status == SessionStatus.SCHEDULED:
+            status = "scheduled"
+            
     return {
         "candidateName": applicant.name,
         "email": applicant.email,
         "phone": applicant.phone or "—",
         "jobTitle": job_title,
         "score": score,
-        "status": applicant.screening_status.value if applicant.screening_status else "completed",
+        "status": status,
         "fitLevel": fit_level,
-        "summary": f"Candidate screened on {applicant.attempted_at.strftime('%B %d, %Y') if applicant.attempted_at else 'recently'}. Demonstrated high clarity of speech and alignment with key criteria. Confirmed notice period fits target pipeline.",
+        "summary": summary,
         "checklist": checklist,
         "dialogue": dialogue,
         "attemptedAt": applicant.attempted_at.isoformat() if applicant.attempted_at else None

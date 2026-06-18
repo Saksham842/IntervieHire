@@ -128,7 +128,23 @@ def get_public_schedule_info(token: str, db: Session = Depends(get_db)):
 
 @router.get("/interview-session/{session_id}")
 def get_public_interview_session_info(session_id: UUID, db: Session = Depends(get_db)):
-    applicant = db.query(Applicant).filter(Applicant.id == session_id).first()
+    from app.models.ai_integration import InterviewSession
+    from app.utils.ai_sync import get_stage_session_id
+    
+    applicant = None
+    # 1. Query by InterviewSession ID first
+    session = db.query(InterviewSession).filter(InterviewSession.id == str(session_id)).first()
+    if session:
+        try:
+            candidate_uuid = UUID(session.candidateId)
+            applicant = db.query(Applicant).filter(Applicant.id == candidate_uuid).first()
+        except Exception:
+            pass
+            
+    # 2. Fallback to direct Applicant.id matching (legacy)
+    if not applicant:
+        applicant = db.query(Applicant).filter(Applicant.id == session_id).first()
+        
     if not applicant:
         raise HTTPException(status_code=404, detail="Session not found.")
         
@@ -144,12 +160,16 @@ def get_public_interview_session_info(session_id: UUID, db: Session = Depends(ge
         stage = "Recruiter Screening"
         scheduled_at = applicant.screening_scheduled_at
         
+    # Generate the stage-specific session ID for the frontend to switch to
+    resolved_session_id = get_stage_session_id(applicant.id, stage)
+    
     return {
         "candidate_name": applicant.name,
         "email": applicant.email,
         "job_title": job_title,
         "stage": stage,
-        "scheduled_at": scheduled_at.isoformat() if scheduled_at else None
+        "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
+        "resolved_session_id": resolved_session_id
     }
 
 @router.get("/confirm/{token}", response_class=HTMLResponse)
@@ -226,7 +246,9 @@ def confirm_interview_slot(token: str, db: Session = Depends(get_db)):
     
     # Send custom MIME/iCalendar confirmation email
     reschedule_link = f"{settings.FRONTEND_URL}/reschedule.html?token={applicant.scheduling_token}"
-    interview_link = f"{settings.FRONTEND_URL}/interview?sessionId={applicant.id}"
+    from app.utils.ai_sync import get_stage_session_id
+    session_id = get_stage_session_id(applicant.id, stage)
+    interview_link = f"{settings.FRONTEND_URL}/interview?sessionId={session_id}"
     uid = f"interview-{stage.lower().replace(' ', '-')}-{applicant.id}@interviehire.com"
     
     try:
@@ -246,6 +268,11 @@ def confirm_interview_slot(token: str, db: Session = Depends(get_db)):
         )
     except Exception as mail_err:
         logger.error(f"Failed to send confirmation email: {mail_err}")
+        raise HTTPException(
+            status_code=status_code if 'status_code' in locals() else 500,
+            detail=f"Failed to send confirmation email: {str(mail_err)}"
+        )
+
         
     time_str = proposed_time.strftime("%B %d, %Y at %I:%M %p UTC")
     
@@ -372,7 +399,9 @@ def public_reschedule_interview(
     db.refresh(applicant)
     
     reschedule_link = f"{settings.FRONTEND_URL}/reschedule.html?token={applicant.scheduling_token}"
-    interview_link = f"{settings.FRONTEND_URL}/interview?sessionId={applicant.id}"
+    from app.utils.ai_sync import get_stage_session_id
+    session_id = get_stage_session_id(applicant.id, stage)
+    interview_link = f"{settings.FRONTEND_URL}/interview?sessionId={session_id}"
     uid = f"interview-{stage.lower().replace(' ', '-')}-{applicant.id}@interviehire.com"
 
     try:
@@ -392,6 +421,11 @@ def public_reschedule_interview(
         )
     except Exception as mail_err:
         logger.error(f"Failed to send rescheduled confirmation email: {mail_err}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send rescheduled confirmation email: {str(mail_err)}"
+        )
+
     
     return {"status": "success", "new_scheduled_time": parsed_time.isoformat()}
 

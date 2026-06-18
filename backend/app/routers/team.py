@@ -61,7 +61,37 @@ def invite_member(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Send team invitation email
+    from app.models.organisation import Organisation
+    from app.utils.email_sender import send_team_invite_email
+    from app.config import settings
+    import logging
+
+    logger = logging.getLogger(__name__)
+    org = db.query(Organisation).filter(Organisation.id == org_id).first()
+    org_name = org.org_name if org else "your organisation"
+    invite_link = f"{settings.FRONTEND_URL}/signup?email={new_user.email}"
+    
+    try:
+        send_team_invite_email(
+            to_email=new_user.email,
+            name=new_user.name,
+            org_name=org_name,
+            role=new_user.user_type.value if hasattr(new_user.user_type, 'value') else str(new_user.user_type),
+            invite_link=invite_link
+        )
+    except Exception as email_err:
+        logger.error(f"Failed to send team invitation email to {new_user.email}: {email_err}")
+        db.delete(new_user)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to send invitation email: {str(email_err)}"
+        )
+
     return new_user
+
 
 
 @router.delete("/{user_id}")
