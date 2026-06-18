@@ -8,7 +8,7 @@ import { computeWeightedScore, getScoringConfig, recommendationFromScore } from 
 import { soundEngine } from './sound.js';
 import { addCandidateToAppState, extractResumeIdentity, showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
-import { getDataSource } from './api.js';
+import { getDataSource, apiUpdateApplicant } from './api.js';
 
 // ==========================================
 // RESUME ANALYSIS (AI-powered, Lina)
@@ -802,6 +802,21 @@ ${resumeText.slice(0, 5000)}`;
     cand.resumeAnalysis = result;
     cand.resumeText = resumeText; // persist so "Reanalyse" works after reloads
     saveStateToLocalStorage();
+
+    // Persist server-side so the score/report survive a device or browser change
+    // and reach the rest of the pipeline — localStorage alone is per-browser.
+    // Only resume-stage fields, so this never triggers interview-session sync.
+    if (cand._backend && getDataSource() === 'api') {
+      apiUpdateApplicant(cid, {
+        match_score: result.matchScore,
+        resume_analysis_report: JSON.stringify(result),
+        resume_analysed: true,
+        resume_shortlisted: result.recommendation === 'Advance',
+      }).catch((err) => {
+        console.warn('Resume analysis saved locally but backend sync failed:', err);
+        if (!quiet) showPremiumToast('Saved locally — backend sync failed. Reanalyse to retry.', 'info');
+      });
+    }
   }
   renderAnalysisResult(cid, result);
   if (!quiet) showPremiumToast(result.engine === 'local' ? 'Resume analysed (local engine).' : 'Deep resume analysis complete.', 'success');

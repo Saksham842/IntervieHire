@@ -109,6 +109,14 @@ export async function apiScheduleCandidate(applicantId, scheduledAt, stage = 'sc
   return mapApplicantOutToCandidate(data);
 }
 
+// Persist a partial applicant update (resume score/report, shortlist flag, etc.)
+// to the backend. `patch` keys are backend snake_case (ApplicantUpdateIn). The
+// route ignores unset fields, so send only what changed. Returns the mapped row.
+export async function apiUpdateApplicant(applicantId, patch) {
+  const data = await request(`/jobs/applicants/${applicantId}`, { method: 'PATCH', body: patch });
+  return mapApplicantOutToCandidate(data);
+}
+
 // ── Mappers: backend (snake_case) ⇄ dashboard (camelCase) ──────────────────
 const arr = (v) => (Array.isArray(v) ? v : []);
 
