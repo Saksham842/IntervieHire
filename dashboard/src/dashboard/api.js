@@ -313,3 +313,31 @@ function mapUserOutToMember(m = {}) {
     _backend: true
   };
 }
+
+export async function apiUploadResumes(jobId, files, source = 'bulk_upload') {
+  const formData = new FormData();
+  Array.from(files).forEach(file => {
+    formData.append('files', file);
+  });
+  
+  const { API_BASE } = await import('../auth-client.js');
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/applicants/upload-resumes?source=${source}`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData
+  });
+  
+  if (!res.ok) {
+    let msg = 'Failed to upload resumes';
+    try {
+      const data = await res.json();
+      msg = data.detail || data.error || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data?.applicants || data?.data || []);
+  return list.map(mapApplicantOutToCandidate);
+}
+

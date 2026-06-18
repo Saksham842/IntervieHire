@@ -1,6 +1,6 @@
 import { document, window, requestAnimationFrame, setTimeout, setInterval, clearInterval } from './runtime.js';
 import { escapeHTML } from './escape.js';
-import { isApiMode, apiAddApplicantsBulk } from './api.js';
+import { isApiMode, apiAddApplicantsBulk, apiUploadResumes } from './api.js';
 import { navigateToJobDetail } from './job-detail.js';
 import { appendTerminalLog, recalculateJobPipelines, renderKanbanBoard } from './kanban-swarm.js';
 import { navigateToTab, openDrawer } from './navigation.js';
@@ -681,6 +681,7 @@ function simulateResumesParsing(files) {
 
   Array.from(files).forEach((file, idx) => {
     const item = {
+      file: file,
       name: file.name,
       size: (file.size / 1024).toFixed(1) + ' KB',
       progress: 0,
@@ -795,12 +796,52 @@ async function extractTextFromResumeFile(file) {
   return '';
 }
 
-function importResumesCandidates() {
+async function importResumesCandidates() {
   if (uploadedFiles.length === 0) return;
 
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (!activeJob) return;
 
+  if (isApiMode() && activeJob._backend) {
+    const importBtn = document.getElementById('btn-resumes-import');
+    if (importBtn) {
+      importBtn.disabled = true;
+      importBtn.textContent = 'Importing...';
+    }
+    
+    try {
+      const sourceParam = currentSourcingMode === 'schedule' ? 'scheduled' : 'bulk_upload';
+      const filesToUpload = uploadedFiles.map(f => f.file).filter(Boolean);
+      showPremiumToast(`Uploading and parsing ${filesToUpload.length} resume(s)...`, 'info');
+      
+      const saved = await apiUploadResumes(activeJob.id, filesToUpload, sourceParam);
+      
+      soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
+      showPremiumToast(`Successfully parsed and imported ${saved.length || filesToUpload.length} candidate(s) into "${escapeHTML(activeJob.roleName)}".`, 'success');
+      
+      // Reset preview state
+      uploadedFiles = [];
+      document.getElementById('resumes-preview-box').style.display = 'none';
+      const fileRes = document.getElementById('input-file-resumes');
+      if (fileRes) fileRes.value = '';
+      const dropzone = document.getElementById('dropzone-resumes');
+      if (dropzone) dropzone.style.display = '';
+      const footer = dropzone ? dropzone.parentElement.querySelector('.sourcing-panel-footer') : null;
+      if (footer) footer.style.display = '';
+      
+      navigateToJobDetail(activeJob.id);
+    } catch (err) {
+      showPremiumToast(`Failed to upload resumes: ${err.message || err}`, 'error');
+    } finally {
+      if (importBtn) {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import Candidates';
+      }
+    }
+    return;
+  }
+
+  // Offline / local storage fallback mode
   const importedCandIds = [];
   uploadedFiles.forEach(file => {
     const fallbackName = extractCandidateNameFromFilename(file.name);
