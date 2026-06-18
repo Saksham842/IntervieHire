@@ -17,7 +17,7 @@ import { soundEngine } from './sound.js';
 import { showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
 import { activeCandidateSubTabs } from './vetting-data.js';
-import { getDataSource, apiScheduleCandidate, apiAddApplicant } from './api.js';
+import { getDataSource, apiScheduleCandidate, apiAddApplicant, apiUpdateApplicant } from './api.js';
 
 // A candidate added in the UI may only carry a local "CAN-…" code (not yet
 // persisted to the backend). Scheduling needs a real backend UUID, so create the
@@ -811,7 +811,22 @@ function updateCandidateStatus(candId, newStatus) {
     showPremiumToast(`${candidate.name} advanced to ${newStatus}.`, 'success');
     soundEngine.playChime([329.63, 440.00, 523.25], 0.2, 0.08);
   }
-  
+
+  saveStateToLocalStorage();
+
+  // Persist the decision server-side. Move-stage only: this never sets
+  // screening/functional_status, so it doesn't spin up an interview session —
+  // scheduling stays the explicit Schedule action.
+  const decision = newStatus === 'Rejected' ? 'rejected'
+    : newStatus === 'Hired' ? 'hired'
+    : (newStatus === 'Screening' || newStatus === 'Functional') ? 'shortlisted'
+    : null;
+  if (decision && candidate._backend && getDataSource() === 'api') {
+    apiUpdateApplicant(candId, { decision }).catch((err) => {
+      console.warn('Stage change saved locally but backend sync failed:', err);
+    });
+  }
+
   refreshAfterStageChange();
 }
 

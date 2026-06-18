@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 from uuid import UUID
 from app.models.user import UserStatus, UserType
@@ -193,7 +193,8 @@ class ApplicantOut(BaseModel):
     remarks: Optional[str]
     match_score: Optional[float] = None
     resume_analysis_report: Optional[str] = None
- 
+    decision: Optional[str] = None
+
     # Screening
     screening_status: Optional[InterviewStatus]
     screening_score: Optional[float]
@@ -245,6 +246,7 @@ class ApplicantUpdateIn(BaseModel):
     remarks: Optional[str] = None
     match_score: Optional[float] = None
     resume_analysis_report: Optional[str] = None
+    decision: Optional[Literal['shortlisted', 'rejected', 'hired']] = None
     screening_scheduled_at: Optional[datetime] = None
     functional_scheduled_at: Optional[datetime] = None
     overall_interview_score: Optional[float] = None

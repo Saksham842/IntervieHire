@@ -241,12 +241,21 @@ function mapApplicantOutToCandidate(a = {}) {
     name: a.name || '',
     email: a.email || '',
     jobApplied: a.job_role_title || a.role_name || '',
-    status: a.functional_status === 'completed' ? 'Functional' : (a.screening_status === 'completed' ? 'Screening' : 'Resume'),
+    // decision (the recruiter's explicit call) wins over derived stage so Hired/Rejected
+    // and a pre-schedule shortlist survive a refetch. 'shortlisted' shows as Screening
+    // (advanced past resume); exact Screening-vs-Functional persists once scheduled.
+    status: a.decision === 'hired' ? 'Hired'
+      : a.decision === 'rejected' ? 'Rejected'
+      : a.functional_status === 'completed' ? 'Functional'
+      : a.screening_status === 'completed' ? 'Screening'
+      : a.decision === 'shortlisted' ? 'Screening'
+      : 'Resume',
     source: a.source || 'ATS',
     interviewStatus: mapInterviewStatus(a.functional_status),
     interviewScore: a.functional_score ?? a.overall_interview_score ?? null,
     cheatProbability: a.cheat_probability ? a.cheat_probability.charAt(0).toUpperCase() + a.cheat_probability.slice(1) : null,
     matchScore: a.match_score ?? null,
+    decision: a.decision ?? null,
     _backend: true,
   };
 }
