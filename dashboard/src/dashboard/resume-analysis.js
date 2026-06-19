@@ -8,7 +8,7 @@ import { computeWeightedScore, getScoringConfig, recommendationFromScore } from 
 import { soundEngine } from './sound.js';
 import { addCandidateToAppState, extractResumeIdentity, showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
-import { getDataSource, apiUpdateApplicant, apiGetResumeText, ensureBackendApplicantId } from './api.js';
+import { getDataSource, apiUpdateApplicant, apiGetResumeText, apiAddApplicant } from './api.js';
 
 // ==========================================
 // RESUME ANALYSIS (AI-powered, Lina)
@@ -825,21 +825,34 @@ ${resumeText.slice(0, 5000)}`;
         if (!quiet) showPremiumToast('Saved locally — backend sync failed. Reanalyse to retry.', 'info');
       });
     } else if (getDataSource() === 'api' && !cand._backend) {
-      // Uploaded/local "CAN-" candidate: register it on the backend so the resume
-      // text + analysis actually persist (previously saved to localStorage only).
-      ensureBackendApplicantId(cand, job.id).then((backendId) => {
-        saveStateToLocalStorage(); // cand.id is now the real backend UUID
-        return apiUpdateApplicant(backendId, {
+      // Register the candidate on the backend so the analysis persists — but keep
+      // its on-screen "CAN-" id STABLE. Mutating it mid-flow broke the row's click
+      // handlers (they closure over the old id) and forced a manual refresh. Tag
+      // jobId + backendId so the next hydrate adopts the backend copy cleanly
+      // instead of duplicating. Backend requires an email to register.
+      if (!cand.email) {
+        if (!quiet) showPremiumToast('Analysis saved locally — add an email to sync this candidate to the backend.', 'info');
+      } else {
+        const registered = cand.backendId
+          ? Promise.resolve(cand.backendId)
+          : apiAddApplicant(job.id, { name: cand.name, email: cand.email, phone: cand.phone }).then((created) => {
+              if (!created || !created.id) throw new Error('Could not register the candidate in the backend.');
+              cand.backendId = created.id;
+              cand.jobId = job.id;
+              saveStateToLocalStorage();
+              return created.id;
+            });
+        registered.then((backendId) => apiUpdateApplicant(backendId, {
           match_score: result.matchScore,
           resume_analysis_report: JSON.stringify(result),
           resume_text: resumeText,
           resume_analysed: true,
           resume_shortlisted: result.recommendation === 'Advance',
+        })).catch((err) => {
+          console.warn('Could not sync candidate to backend:', err);
+          if (!quiet) showPremiumToast(`Analysis saved locally — couldn't sync: ${err.message || err}`, 'info');
         });
-      }).catch((err) => {
-        console.warn('Could not sync candidate to backend:', err);
-        if (!quiet) showPremiumToast(`Analysis saved locally — couldn't sync: ${err.message || err}`, 'info');
-      });
+      }
     }
   }
   renderAnalysisResult(cid, result);

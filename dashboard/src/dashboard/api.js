@@ -101,9 +101,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // and adopt its UUID. Mutates c2 (id + _backend). Returns the backend id.
 export async function ensureBackendApplicantId(c2, jobId) {
   if (UUID_RE.test(String(c2.id || ''))) return c2.id;
+  if (c2.backendId && UUID_RE.test(String(c2.backendId))) return c2.backendId; // already registered (e.g. by resume analysis)
   if (!c2.email) throw new Error(`${c2.name || 'Candidate'} has no email — add one before syncing to the backend.`);
   const created = await apiAddApplicant(jobId, { name: c2.name, email: c2.email, phone: c2.phone });
   if (!created || !created.id) throw new Error('Could not register the candidate in the backend.');
+  c2.backendId = created.id;
   c2.id = created.id;       // adopt the real backend UUID for all future actions
   c2._backend = true;
   return created.id;
