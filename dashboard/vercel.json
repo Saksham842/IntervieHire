@@ -1,3 +1,13 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/interview",
+      "destination": "https://interviehire-candidate.vercel.app/interview"
+    },
+    {
+      "source": "/interview/:path*",
+      "destination": "https://interviehire-candidate.vercel.app/interview/:path*"
+    }
+  ]
 }

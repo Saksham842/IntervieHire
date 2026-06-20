@@ -271,9 +271,8 @@ function mapApplicantOutToCandidate(a = {}) {
     // (advanced past resume); exact Screening-vs-Functional persists once scheduled.
     status: a.decision === 'hired' ? 'Hired'
       : a.decision === 'rejected' ? 'Rejected'
-      : a.functional_status === 'completed' ? 'Functional'
-      : a.screening_status === 'completed' ? 'Screening'
-      : a.decision === 'shortlisted' ? 'Screening'
+      : a.functional_status ? 'Functional'
+      : (a.screening_status || a.decision === 'shortlisted') ? 'Screening'
       : 'Resume',
     source: a.source || 'ATS',
     interviewStatus: mapInterviewStatus(a.functional_status),

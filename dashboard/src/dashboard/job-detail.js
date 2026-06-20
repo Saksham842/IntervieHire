@@ -9,6 +9,7 @@ import { AppState } from './state.js';
 import { isApiMode, apiFetchApplicants } from './api.js';
 import { showPremiumToast } from './sourcing.js';
 import { pushUrl } from './url-sync.js';
+import { recalculateJobPipelines } from './kanban-swarm.js';
 
 // ==========================================
 // JOB DETAIL VIEW
@@ -21,6 +22,9 @@ function navigateToJobDetail(jobId) {
   AppState.activeJobId = jobId;
   AppState.activeTab = 'job-detail';
   pushUrl(`/dashboard/jobs/${jobId}`);
+
+  // Recalculate pipelines first based on current AppState.candidates
+  recalculateJobPipelines();
 
 
   // Sidebar: keep Jobs highlighted as parent
@@ -121,6 +125,20 @@ async function hydrateBackendApplicants(job) {
 
   // Only refresh if the user is still viewing this job.
   if (AppState.activeJobId !== job.id) return;
+
+  // Recalculate pipelines first based on newly hydrated candidates
+  recalculateJobPipelines();
+
+  // Update sub-tab counts
+  const elScreening = document.getElementById('jd-count-screening');
+  if (elScreening) elScreening.textContent = job.pipeline.screening;
+  const elFunctional = document.getElementById('jd-count-functional');
+  if (elFunctional) {
+    elFunctional.textContent = job.pipeline.screening > 0
+      ? `${job.pipeline.functional} of ${job.pipeline.screening}`
+      : job.pipeline.functional;
+  }
+
   renderFunnelStages(job);
   renderFunnelInsights(job);
   renderJobDetailPanes(job);

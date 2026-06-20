@@ -75,15 +75,29 @@ def _build_job_out(job: Job, db: Session) -> dict:
             tags = json.loads(job.tags)
         except Exception:
             tags = [t.strip() for t in job.tags.split(",") if t.strip()]
+
+    resume_cnt = 0
+    screening_cnt = 0
+    functional_cnt = 0
+    for a in applicants:
+        if a.decision in ("hired", "rejected"):
+            continue
+        if a.functional_status is not None:
+            functional_cnt += 1
+        elif a.screening_status is not None or a.decision == "shortlisted":
+            screening_cnt += 1
+        else:
+            resume_cnt += 1
+
     return {
         **job.__dict__,
         "created_by_name": job.created_by.name if job.created_by else None,
         "tags": tags,
         "pipeline": JobPipelineCounts(
             total=len(applicants),
-            resume=sum(1 for a in applicants if a.resume_analysed),  # count analysed resumes
-            screening=sum(1 for a in applicants if a.screening_status is not None),
-            functional=sum(1 for a in applicants if a.functional_status is not None),
+            resume=resume_cnt,
+            screening=screening_cnt,
+            functional=functional_cnt,
         ),
         "resume_parameters": json.loads(job.resume_parameters) if job.resume_parameters else None,
         "screening_parameters": json.loads(job.screening_parameters) if job.screening_parameters else None,
@@ -1475,11 +1489,21 @@ def get_responses(
 
 def _build_funnel(applicants: list) -> dict:
     total = len(applicants)
-    resume = sum(1 for a in applicants if a.resume_analysed)
-    screening = sum(1 for a in applicants if a.screening_status is not None)
-    functional = sum(1 for a in applicants if a.functional_status is not None)
+    resume = 0
+    screening = 0
+    functional = 0
+    for a in applicants:
+        if a.decision in ("hired", "rejected"):
+            continue
+        if a.functional_status is not None:
+            functional += 1
+        elif a.screening_status is not None or a.decision == "shortlisted":
+            screening += 1
+        else:
+            resume += 1
+
     completed = sum(1 for a in applicants if a.functional_status and a.functional_status.value == "completed")
-    qualified = sum(1 for a in applicants if a.functional_score and a.functional_score >= 60)
+    qualified = sum(1 for a in applicants if a.decision == "hired")
 
     def conv(n, base):
         return round((n / base) * 100) if base else 0
