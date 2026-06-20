@@ -8,7 +8,7 @@
 // see memory: prefer-vansh-version).
 
 import { createTopic, createQuestionBlueprint, toFunctionalParameters, toScreeningQuestions } from './blueprint-engine.js';
-import { request, apiLogin, apiSignup, apiMe, apiLogout, isAuthed, clearAuthed } from '../auth-client.js';
+import { request, API_BASE, apiLogin, apiSignup, apiMe, apiLogout, isAuthed, clearAuthed } from '../auth-client.js';
 
 // Auth + HTTP primitives live in ../auth-client.js (dependency-free so the lean
 // /login + /signup pages can reuse them). Re-export for existing callers here.
@@ -121,6 +121,32 @@ export async function apiAddApplicant(jobId, { name, email, phone } = {}) {
     },
   });
   return mapApplicantOutToCandidate(data);
+}
+
+// Upload one or more resume files to the backend, which PARSES each server-side
+// (name / email / phone scraped from the resume text) and creates/updates the
+// applicant — so scheduling + calendar invites use the candidate's real email.
+// `source` controls the pipeline entry (e.g. 'scheduled' or 'bulk_upload').
+// Returns the mapped candidates (with real backend UUIDs + scraped contact info).
+export async function apiUploadResumes(jobId, files, source) {
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f, f.name);
+  let url = `${API_BASE}/jobs/${jobId}/applicants/upload-resumes`;
+  if (source) url += `?source=${encodeURIComponent(source)}`;
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', credentials: 'include', body: fd, cache: 'no-store' });
+  } catch (err) {
+    throw new Error(`Network error reaching backend (${API_BASE}). ${err.message}`);
+  }
+  if (!res.ok) {
+    let detail = `Resume upload failed (${res.status})`;
+    try { const e = await res.json(); detail = e.detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data?.applicants || data?.data || []);
+  return list.map(mapApplicantOutToCandidate);
 }
 
 export async function apiScheduleCandidate(applicantId, scheduledAt, stage = 'screening') {

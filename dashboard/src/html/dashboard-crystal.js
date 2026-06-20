@@ -49,6 +49,14 @@ export const html = `
               </svg>
               <span>AI Swarm</span>
             </li>
+            <li class="nav-item" data-tab="talent">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                <path d="M8 11h6"></path>
+              </svg>
+              <span>Talent Finder</span>
+            </li>
             <li class="nav-item" data-tab="team">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
@@ -562,6 +570,16 @@ export const html = `
                   <button id="btn-swarm-prompt" class="btn-term-send">Send</button>
                 </div>
               </div>
+            </div>
+          </section>
+
+          <!-- ===================================== -->
+          <!-- TALENT FINDER VIEW (top-level page) -->
+          <!-- ===================================== -->
+          <section class="dashboard-view" id="view-talent">
+            <!-- Rendered by talent-finder-panel.js into #jd-pane-talent -->
+            <div id="jd-pane-talent">
+              <div class="tf-muted" style="padding:20px">Loading Talent Finder…</div>
             </div>
           </section>
 

@@ -218,13 +218,25 @@ function renderLive(job, container) {
 
   const entry = liveReports.get(sel.candidate.id);
   if (!entry) {
-    liveReports.set(sel.candidate.id, { state: 'loading' });
-    apiFetchCandidateReport(sel.candidate.id)
-      .then((rep) => liveReports.set(sel.candidate.id, rep && Array.isArray(rep.questionBreakdown) ? { state: 'ready', report: rep } : { state: 'pending' }))
-      .catch((e) => liveReports.set(sel.candidate.id, { state: 'error', error: (e && e.message) || '' }))
-      .finally(() => { if (daUi.selectedId === sel.candidate.id && AppState.activeJobId === job.id) renderDeepAnalysisPane(job, container); });
-    container.innerHTML = `<div class="da-intel">${liveDetailShell(sel.candidate, 'loading')}</div>`;
-    bind(container, job); return;
+    // Only real backend applicants (UUID ids) have an interview session to score.
+    // Local/seed candidates (e.g. "CAN-1103-FK9") have no report — show a clean
+    // "pending" state rather than firing a doomed request that 422s.
+    const isBackendId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(sel.candidate.id));
+    if (!isBackendId) {
+      liveReports.set(sel.candidate.id, { state: 'local' });
+    } else {
+      liveReports.set(sel.candidate.id, { state: 'loading' });
+      apiFetchCandidateReport(sel.candidate.id)
+        .then((rep) => liveReports.set(sel.candidate.id, rep && Array.isArray(rep.questionBreakdown) ? { state: 'ready', report: rep } : { state: 'pending' }))
+        .catch((e) => {
+          const msg = (e && e.message) || '';
+          // A non-UUID / not-found id just means "no interview on the backend" — treat as pending, not an error.
+          liveReports.set(sel.candidate.id, /uuid|not found|404|422/i.test(msg) ? { state: 'pending' } : { state: 'error', error: msg });
+        })
+        .finally(() => { if (daUi.selectedId === sel.candidate.id && AppState.activeJobId === job.id) renderDeepAnalysisPane(job, container); });
+      container.innerHTML = `<div class="da-intel">${liveDetailShell(sel.candidate, 'loading')}</div>`;
+      bind(container, job); return;
+    }
   }
   container.innerHTML = `<div class="da-intel">${entry.state === 'ready'
     ? detailMarkup({ candidate: sel.candidate, report: entry.report }, done)
@@ -237,7 +249,9 @@ function liveDetailShell(candidate, state, error) {
     ? ['Loading evaluation…', 'Fetching this candidate’s report from the live backend.']
     : state === 'error'
       ? ['Couldn’t load the report', error || 'The backend did not return an evaluation.']
-      : ['Evaluation pending', 'This interview hasn’t been scored yet. The full report — dimensions, rubric coverage, red flags and a recommendation — appears here once the evaluation engine processes the transcript.'];
+      : state === 'local'
+        ? ['Demo candidate — no live interview', 'This is a local/sample candidate, so there is no recorded interview to score. Add a real applicant (or schedule one), have them complete the AI interview, and the full report appears here.']
+        : ['Evaluation pending', 'This interview hasn’t been scored yet. The full report — dimensions, rubric coverage, red flags and a recommendation — appears here once the evaluation engine processes the transcript.'];
   return `
     <div class="da-detail-head"><button class="da-back" data-action="back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg> All candidates</button></div>
     <div class="da-pending ${state === 'loading' ? 'is-loading' : ''}">

@@ -152,16 +152,6 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
             resume_text = ""
         candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
         if not candidate:
-            # Respect the unique (companyId, email) constraint: reuse an existing
-            # candidate row for this email under the company rather than inserting a
-            # duplicate (which would 500 the schedule). The interview session keys
-            # off applicant.id, so pointing candidateId at the existing row is safe.
-            candidate = db.query(Candidate).filter(
-                Candidate.companyId == company_id, Candidate.email == applicant.email
-            ).first()
-            if candidate:
-                candidate_id = candidate.id
-        if not candidate:
             candidate = Candidate(
                 id=candidate_id,
                 companyId=company_id,

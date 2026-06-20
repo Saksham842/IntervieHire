@@ -17,7 +17,21 @@ import { soundEngine } from './sound.js';
 import { showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
 import { activeCandidateSubTabs } from './vetting-data.js';
-import { getDataSource, apiScheduleCandidate, apiUpdateApplicant, ensureBackendApplicantId } from './api.js';
+import { getDataSource, apiScheduleCandidate, apiAddApplicant } from './api.js';
+
+// A candidate added in the UI may only carry a local "CAN-…" code (not yet
+// persisted to the backend). Scheduling needs a real backend UUID, so create the
+// applicant on demand and adopt its UUID. Returns the id to schedule against.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function ensureBackendApplicantId(c2, jobId) {
+  if (UUID_RE.test(String(c2.id || ''))) return c2.id;
+  if (!c2.email) throw new Error(`${c2.name || 'Candidate'} has no email — add one before scheduling.`);
+  const created = await apiAddApplicant(jobId, { name: c2.name, email: c2.email, phone: c2.phone });
+  if (!created || !created.id) throw new Error('Could not register the candidate in the backend.');
+  c2.id = created.id;       // adopt the real backend UUID for all future actions
+  c2._backend = true;
+  return created.id;
+}
 
 function renderJobDetailPanes(job) {
   const searchVal = document.getElementById('jd-candidate-search').value.trim().toLowerCase();
@@ -797,22 +811,7 @@ function updateCandidateStatus(candId, newStatus) {
     showPremiumToast(`${candidate.name} advanced to ${newStatus}.`, 'success');
     soundEngine.playChime([329.63, 440.00, 523.25], 0.2, 0.08);
   }
-
-  saveStateToLocalStorage();
-
-  // Persist the decision server-side. Move-stage only: this never sets
-  // screening/functional_status, so it doesn't spin up an interview session —
-  // scheduling stays the explicit Schedule action.
-  const decision = newStatus === 'Rejected' ? 'rejected'
-    : newStatus === 'Hired' ? 'hired'
-    : (newStatus === 'Screening' || newStatus === 'Functional') ? 'shortlisted'
-    : null;
-  if (decision && candidate._backend && getDataSource() === 'api') {
-    apiUpdateApplicant(candId, { decision }).catch((err) => {
-      console.warn('Stage change saved locally but backend sync failed:', err);
-    });
-  }
-
+  
   refreshAfterStageChange();
 }
 

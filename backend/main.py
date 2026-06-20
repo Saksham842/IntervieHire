@@ -5,6 +5,7 @@ from app.config import settings
 from app.websocket_routes import router as websocket_router
 from app.database import Base, engine
 from app.routers import jobs, team, organisation, usage, settings as settings_router, deepseek, auth, public, leaderboard
+from app.talent_finder.routes import router as talent_finder_router
 
 # Import all models so SQLAlchemy registers them before create_all
 import app.models  # noqa
@@ -123,6 +124,7 @@ app.include_router(settings_router.router,  prefix="/api/settings", tags=["Setti
 app.include_router(deepseek.router,         prefix="/api/deepseek", tags=["DeepSeek"])
 app.include_router(public.router,           prefix="/api/public",   tags=["Public"])
 app.include_router(leaderboard.router,      prefix="/api/leaderboard", tags=["Leaderboard"])
+app.include_router(talent_finder_router,    prefix="/api/talent-finder", tags=["Talent Finder"])
 
 
 @app.get("/")

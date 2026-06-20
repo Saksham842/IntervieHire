@@ -411,6 +411,35 @@ export default function Interview() {
           </div>
         </header>
 
+        {/* Prominent prompt: the interviewer's voice can only be recorded if the
+            candidate shares the screen/tab WITH audio (browsers can't capture
+            device audio silently). Shown until capture is active. */}
+        {calibration && avatarCapture !== 'on' && (
+          <div
+            onClick={enableAvatarCapture}
+            style={{
+              position: 'fixed', top: 64, left: '50%', transform: 'translateX(-50%)', zIndex: 9000,
+              display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+              padding: '12px 18px', borderRadius: 12, maxWidth: '92vw',
+              background: avatarCapture === 'error' ? 'linear-gradient(135deg,#7f1d1d,#b91c1c)' : 'linear-gradient(135deg,#0e7490,#0891b2)',
+              color: '#fff', boxShadow: '0 10px 30px rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.18)',
+              animation: 'ihpulse 1.6s ease-in-out infinite',
+            }}
+            title="Record the interviewer's voice"
+          >
+            <style>{'@keyframes ihpulse{0%,100%{box-shadow:0 8px 24px rgba(8,145,178,0.35)}50%{box-shadow:0 8px 36px rgba(8,145,178,0.75)}}'}</style>
+            <span style={{ fontSize: 22 }}>🎧</span>
+            <div style={{ lineHeight: 1.35 }}>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>
+                {avatarCapture === 'error' ? 'Interviewer audio not captured — click to retry' : 'Click to record the interviewer’s voice'}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.9 }}>
+                {avatarCaptureMsg || 'Pick “Entire Screen” or this tab and CHECK “Share system/tab audio”.'}
+              </div>
+            </div>
+          </div>
+        )}
+
         <main className="content">
           <section className="avatar-panel">
             <iframe

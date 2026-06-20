@@ -78,7 +78,7 @@ function navigateToPath(path) {
     }
   } else if (sub === 'settings') {
     window.navigateToSubtab?.('settings-general');
-  } else if (['analytics', 'swarm', 'team', 'career'].includes(sub)) {
+  } else if (['analytics', 'swarm', 'talent', 'team', 'career'].includes(sub)) {
     window.navigateToTab?.(sub);
   }
 }
