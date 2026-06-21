@@ -6,10 +6,10 @@ import { navigateToTab, openDrawer } from './navigation.js';
 import { updateAllSlidingPills } from './pills.js';
 import { applyDateRangeGlobally, renderAnalyticsTable, renderJobCards, updateSummaryMetrics } from './render-views.js';
 import { isGarbageText, resumeIdentityCache, resumeTextCache, runBulkResumeAnalysis } from './resume-analysis.js';
+import { isApiMode, apiAddApplicant } from './api.js';
 import { soundEngine } from './sound.js';
 import { AppState } from './state.js';
 import { pushUrl } from './url-sync.js';
-import { isApiMode, apiAddApplicant, apiUpdateApplicant, apiUploadResumes } from './api.js';
 
 // ============================================================
 // SOURCING VIEW CONTROLLER & MASS INTAKE LOGIC
@@ -23,9 +23,23 @@ let currentSourcingTab = 'csv';
 
 function initSourcing() {
   // Bind click on '+ Add Applicants' inside job detail overview
-  const addApplicantsBtn = document.querySelector('.btn-jd-primary');
+  const addApplicantsBtn = document.querySelector('.jd-actions .btn-jd-primary') || document.querySelector('.btn-jd-primary');
   if (addApplicantsBtn) {
-    addApplicantsBtn.addEventListener('click', () => {
+    addApplicantsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const activeTabEl = document.querySelector('.jd-tab.active');
+      const tabId = activeTabEl ? activeTabEl.getAttribute('data-jd-tab') : 'overview';
+      if (['resume', 'screening', 'functional'].includes(tabId)) {
+        const inlineBtn = document.getElementById(`btn-add-applicants-${tabId}`);
+        if (inlineBtn) {
+          inlineBtn.click();
+          const panel = document.getElementById(`add-applicants-panel-${tabId}`);
+          if (panel) {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          return;
+        }
+      }
       navigateToSourcing(AppState.activeJobId);
     });
   }
@@ -35,13 +49,18 @@ function initSourcing() {
   if (srcBcJobs) {
     srcBcJobs.addEventListener('click', () => {
       navigateToTab('jobs');
+      pushUrl('/dashboard/jobs');
     });
   }
   
   const srcBcJobname = document.getElementById('src-bc-jobname');
   if (srcBcJobname) {
     srcBcJobname.addEventListener('click', () => {
-      navigateToJobDetail(AppState.activeJobId);
+      if (typeof window.navigateToJobStage === 'function') {
+        window.navigateToJobStage(AppState.activeJobId, 'overview');
+      } else {
+        navigateToJobDetail(AppState.activeJobId);
+      }
     });
   }
 
@@ -605,23 +624,11 @@ async function importCsvCandidates() {
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (!activeJob) return;
 
-  const importBtn = document.getElementById('btn-csv-import');
-  if (importBtn) importBtn.disabled = true;
-  const queued = csvParsedCandidates.slice();
-  let ok = 0;
-  const fails = [];
-  for (const cand of queued) {
-    try { await addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob); ok++; }
-    catch (e) { fails.push(`${cand.name}: ${(e && e.message) || 'failed'}`); }
-  }
-  if (importBtn) importBtn.disabled = false;
+  const localIds = csvParsedCandidates.map(cand =>
+    addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob));
 
-  if (ok) {
-    soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
-    showPremiumToast(`Added ${ok} candidate(s) to "${escapeHTML(activeJob.roleName)}"${fails.length ? ` · ${fails.length} failed` : ''}.`, ok === queued.length ? "success" : "info");
-  }
-  if (fails.length) showPremiumToast(`Couldn't add: ${escapeHTML(fails[0])}`, "error");
-  if (!ok) return;
+  soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
+  showPremiumToast(`Successfully imported ${csvParsedCandidates.length} candidate(s) into "${escapeHTML(activeJob.roleName)}".`, "success");
 
   // Reset
   csvParsedCandidates = [];
@@ -644,6 +651,9 @@ async function importCsvCandidates() {
     renderJobCards();
   }
 
+  // Persist to the backend BEFORE navigating — the job-detail hydrate then fetches
+  // and shows them, so no manual refresh is needed (api mode).
+  await persistImportedCandidates(localIds, activeJob);
   navigateToJobDetail(AppState.activeJobId);
 }
 
@@ -677,7 +687,6 @@ function simulateResumesParsing(files) {
 
   Array.from(files).forEach((file, idx) => {
     const item = {
-      file,                       // keep the real File for the backend upload/parse
       name: file.name,
       size: (file.size / 1024).toFixed(1) + ' KB',
       progress: 0,
@@ -798,61 +807,19 @@ async function importResumesCandidates() {
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (!activeJob) return;
 
-  const importBtn = document.getElementById('btn-resumes-import');
-  if (importBtn) importBtn.disabled = true;
-  const files = uploadedFiles.slice();
   const importedCandIds = [];
-  const fails = [];
+  uploadedFiles.forEach(file => {
+    const fallbackName = extractCandidateNameFromFilename(file.name);
+    const identity = file.identity || extractResumeIdentity(file.textContent, fallbackName, file.name);
+    const name = identity.name || fallbackName;
+    const email = identity.email || createPlaceholderEmail(name);
+    const phone = identity.phone || '';
+    const candId = addCandidateToAppState(name, email, phone, activeJob, file.textContent);
+    importedCandIds.push(candId);
+  });
 
-  // API mode: send the actual resume files to the backend, which parses each
-  // server-side (name/email/phone scraped from the resume) and creates the
-  // applicant — so scheduling + calendar invites use the candidate's REAL email.
-  if (isApiMode() && activeJob._backend) {
-    try {
-      const realFiles = files.map(f => f.file).filter(Boolean);
-      if (!realFiles.length) throw new Error('No readable files to upload');
-      // 'scheduled' source moves them toward Recruiter Screening; 'bulk_upload' for analyse.
-      const source = currentSourcingMode === 'analyse' ? 'bulk_upload' : 'scheduled';
-      const created = await apiUploadResumes(activeJob.id, realFiles, source);
-      created.forEach((c) => {
-        c.jobApplied = activeJob.roleName;
-        c.jobId = activeJob.id;
-        AppState.candidates = (AppState.candidates || []).filter((x) => x.id !== c.id);
-        AppState.candidates.push(c);
-        importedCandIds.push(c.id);
-      });
-      // keep the client-extracted resume text available for AI analysis
-      files.forEach((f) => {
-        if (!f.textContent || isGarbageText(f.textContent)) return;
-        const match = created.find((c) => f.identity && c.email && c.email.toLowerCase() === String(f.identity.email || '').toLowerCase())
-          || created.find((c) => (c.name || '').toLowerCase() === String((f.identity && f.identity.name) || '').toLowerCase());
-        if (match) resumeTextCache[match.id] = f.textContent;
-      });
-    } catch (e) {
-      fails.push((e && e.message) || 'upload failed');
-    }
-  } else {
-    // Local mode: parse client-side and store in-memory.
-    for (const file of files) {
-      const fallbackName = extractCandidateNameFromFilename(file.name);
-      const identity = file.identity || extractResumeIdentity(file.textContent, fallbackName, file.name);
-      const name = identity.name || fallbackName;
-      const email = identity.email || createPlaceholderEmail(name);
-      const phone = identity.phone || '';
-      try {
-        const candId = await addCandidateToAppState(name, email, phone, activeJob, file.textContent);
-        importedCandIds.push(candId);
-      } catch (e) { fails.push(`${name}: ${(e && e.message) || 'failed'}`); }
-    }
-  }
-  if (importBtn) importBtn.disabled = false;
-
-  if (!importedCandIds.length) {
-    showPremiumToast(`Couldn't add candidates: ${escapeHTML(fails[0] || 'backend error')}`, "error");
-    return;
-  }
   soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
-  showPremiumToast(`Imported ${importedCandIds.length} candidate(s)${fails.length ? ` · ${fails.length} failed` : ''} — running AI analysis...`, "success");
+  showPremiumToast(`Imported ${uploadedFiles.length} candidate(s) — running AI analysis...`, "success");
 
   uploadedFiles = [];
   document.getElementById('resumes-preview-box').style.display = 'none';
@@ -873,11 +840,14 @@ async function importResumesCandidates() {
     renderJobCards();
   }
 
+  // Persist first so the candidates survive the hydrate (no manual refresh), then
+  // analyse against their real backend ids (the resume caches were re-keyed).
+  const backendIds = await persistImportedCandidates(importedCandIds, activeJob);
   navigateToJobDetail(AppState.activeJobId);
 
   if (currentSourcingMode === 'analyse') {
     setTimeout(() => {
-      runBulkResumeAnalysis(importedCandIds, activeJob);
+      runBulkResumeAnalysis(backendIds, activeJob);
     }, 600);
   }
 }
@@ -1109,23 +1079,11 @@ async function importManualQueue() {
   const activeJob = AppState.jobs.find(j => j.id === AppState.activeJobId);
   if (!activeJob) return;
 
-  const importBtn = document.getElementById('btn-manual-import');
-  if (importBtn) importBtn.disabled = true;
-  const queued = sourcingQueue.slice();
-  let ok = 0;
-  const fails = [];
-  for (const cand of queued) {
-    try { await addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob); ok++; }
-    catch (e) { fails.push(`${cand.name}: ${(e && e.message) || 'failed'}`); }
-  }
-  if (importBtn) importBtn.disabled = false;
+  const localIds = sourcingQueue.map(cand =>
+    addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob));
 
-  if (ok) {
-    soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
-    showPremiumToast(`Added ${ok} candidate(s) to "${escapeHTML(activeJob.roleName)}"${fails.length ? ` · ${fails.length} failed` : ''}.`, ok === queued.length ? "success" : "info");
-  }
-  if (fails.length) showPremiumToast(`Couldn't add: ${escapeHTML(fails[0])}`, "error");
-  if (!ok) return;
+  soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
+  showPremiumToast(`Successfully imported ${sourcingQueue.length} candidate(s) into "${escapeHTML(activeJob.roleName)}".`, "success");
 
   sourcingQueue = [];
   renderManualQueue();
@@ -1134,47 +1092,25 @@ async function importManualQueue() {
   recalculateJobPipelines();
   updateSummaryMetrics();
   renderAnalyticsTable();
-  
+
   if (document.getElementById('jobs-board-container') && document.getElementById('jobs-board-container').style.display !== 'none') {
     renderKanbanBoard();
   } else {
     renderJobCards();
   }
 
+  // Persist before navigating so the hydrate shows them without a manual refresh.
+  await persistImportedCandidates(localIds, activeJob);
   navigateToJobDetail(AppState.activeJobId);
 }
 
 // === Shared Candidate Insertion helper ===
-// In API mode this PERSISTS the applicant to the backend (so it survives a refresh
-// and shows up in the job's pipeline); in local mode it keeps the old in-memory
-// behavior. Async — callers must await it. Returns the candidate id (backend UUID
-// in API mode, local "CAN-…" code otherwise).
-async function addCandidateToAppState(name, email, phone, job, resumeText) {
+function addCandidateToAppState(name, email, phone, job, resumeText) {
   const identity = extractResumeIdentity(resumeText, name);
   const candidateName = identity.name || normalizeCandidateName(name) || name;
   const candidateEmail = identity.email || email || createPlaceholderEmail(candidateName);
   const candidatePhone = identity.phone || phone || '';
 
-  // ---- API mode: write to the database -------------------------------------
-  if (isApiMode() && job && job._backend) {
-    const created = await apiAddApplicant(job.id, { name: candidateName, email: candidateEmail, phone: candidatePhone });
-    created.jobApplied = job.roleName;
-    created.jobId = job.id;
-    created.linkedin = identity.linkedin || '';
-    created.resumeIdentitySource = identity.source;
-    // de-dupe by backend id, then add
-    AppState.candidates = (AppState.candidates || []).filter((c) => c.id !== created.id);
-    AppState.candidates.push(created);
-    if (resumeText && !isGarbageText(resumeText)) {
-      resumeTextCache[created.id] = resumeText;
-      resumeIdentityCache[created.id] = identity;
-      // persist the parsed resume text so analysis/refresh use real data
-      try { await apiUpdateApplicant(created.id, { resume_text: resumeText }); } catch { /* non-fatal */ }
-    }
-    return created.id;
-  }
-
-  // ---- Local mode: in-memory only ------------------------------------------
   const idChars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   let candId = 'CAN-';
   for (let i = 0; i < 4; i++) {
@@ -1211,6 +1147,46 @@ async function addCandidateToAppState(name, email, phone, job, resumeText) {
   }
 
   return candId;
+}
+
+// In api mode an imported candidate starts as a local "CAN-…" row; persist each to
+// the backend so it survives hydrateBackendApplicants (which replaces the in-memory
+// list with the backend's copy on the next job-detail render). Without this the row
+// only shows after a manual page refresh. Re-keys the resume caches CAN-… → backend
+// UUID and sets cand.jobId so hydrate dedups; returns the surviving id list for
+// downstream use (e.g. bulk analysis).
+// A create can fail (duplicate/blank email, backend down). In api mode a local-only
+// row CANNOT be shown for a backend job — the job-detail filter requires
+// jobId === job.id, which the next hydrate then wipes — so rather than leave an
+// invisible ghost (silent loss), we drop the failed rows and tell the recruiter
+// exactly who failed and why, so they can fix and re-import.
+async function persistImportedCandidates(localIds, job) {
+  if (!isApiMode() || !job || !job._backend) return localIds;
+  const ids = [];
+  const failed = [];
+  for (const localId of localIds) {
+    const cand = AppState.candidates.find((c) => c.id === localId);
+    if (!cand) continue;
+    try {
+      const created = await apiAddApplicant(job.id, { name: cand.name, email: cand.email, phone: cand.phone });
+      if (!created || !created.id) throw new Error('no id returned');
+      const uuid = created.id;
+      if (resumeTextCache[localId] != null) { resumeTextCache[uuid] = resumeTextCache[localId]; delete resumeTextCache[localId]; }
+      if (resumeIdentityCache[localId] != null) { resumeIdentityCache[uuid] = resumeIdentityCache[localId]; delete resumeIdentityCache[localId]; }
+      cand.id = uuid; cand.jobId = job.id; cand._backend = true;
+      ids.push(uuid);
+    } catch (e) {
+      failed.push(cand);
+    }
+  }
+  if (failed.length) {
+    const failedIds = new Set(failed.map((c) => c.id));
+    AppState.candidates = AppState.candidates.filter((c) => !failedIds.has(c.id));
+    failed.forEach((c) => { delete resumeTextCache[c.id]; delete resumeIdentityCache[c.id]; });
+    const names = failed.map((c) => c.name).slice(0, 3).join(', ') + (failed.length > 3 ? ` +${failed.length - 3} more` : '');
+    showPremiumToast(`Couldn't save ${failed.length} candidate(s) to the backend (${names}) — check for duplicate or blank emails and re-import.`, 'error');
+  }
+  return ids;
 }
 
 function showPremiumToast(message, type = 'success', action = null) {

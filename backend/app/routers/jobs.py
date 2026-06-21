@@ -75,15 +75,29 @@ def _build_job_out(job: Job, db: Session) -> dict:
             tags = json.loads(job.tags)
         except Exception:
             tags = [t.strip() for t in job.tags.split(",") if t.strip()]
+
+    resume_cnt = 0
+    screening_cnt = 0
+    functional_cnt = 0
+    for a in applicants:
+        if a.decision in ("hired", "rejected"):
+            continue
+        if a.functional_status is not None:
+            functional_cnt += 1
+        elif a.screening_status is not None or a.decision == "shortlisted":
+            screening_cnt += 1
+        else:
+            resume_cnt += 1
+
     return {
         **job.__dict__,
         "created_by_name": job.created_by.name if job.created_by else None,
         "tags": tags,
         "pipeline": JobPipelineCounts(
             total=len(applicants),
-            resume=sum(1 for a in applicants if a.resume_analysed),  # count analysed resumes
-            screening=sum(1 for a in applicants if a.screening_status is not None),
-            functional=sum(1 for a in applicants if a.functional_status is not None),
+            resume=resume_cnt,
+            screening=screening_cnt,
+            functional=functional_cnt,
         ),
         "resume_parameters": json.loads(job.resume_parameters) if job.resume_parameters else None,
         "screening_parameters": json.loads(job.screening_parameters) if job.screening_parameters else None,
@@ -247,7 +261,8 @@ def upload_jd(
 @router.post("/extract-jd")
 def extract_jd(
     file: UploadFile = File(...),
-    prompt: Optional[str] = Form(None)
+    prompt: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user)
 ):
     """Parses an uploaded PDF/DOCX job description and extracts details, refined by prompt guidelines."""
     import time
@@ -1475,11 +1490,21 @@ def get_responses(
 
 def _build_funnel(applicants: list) -> dict:
     total = len(applicants)
-    resume = sum(1 for a in applicants if a.resume_analysed)
-    screening = sum(1 for a in applicants if a.screening_status is not None)
-    functional = sum(1 for a in applicants if a.functional_status is not None)
+    resume = 0
+    screening = 0
+    functional = 0
+    for a in applicants:
+        if a.decision in ("hired", "rejected"):
+            continue
+        if a.functional_status is not None:
+            functional += 1
+        elif a.screening_status is not None or a.decision == "shortlisted":
+            screening += 1
+        else:
+            resume += 1
+
     completed = sum(1 for a in applicants if a.functional_status and a.functional_status.value == "completed")
-    qualified = sum(1 for a in applicants if a.functional_score and a.functional_score >= 60)
+    qualified = sum(1 for a in applicants if a.decision == "hired")
 
     def conv(n, base):
         return round((n / base) * 100) if base else 0
@@ -1568,6 +1593,8 @@ def add_applicant(
     applicant = Applicant(**data.model_dump(), job_id=job_id)
     if applicant.source == ApplicantSource.scheduled:
         applicant.screening_status = InterviewStatus.pending
+    elif applicant.source == ApplicantSource.functional:
+        applicant.functional_status = InterviewStatus.pending
     db.add(applicant)
     db.commit()
     db.refresh(applicant)
@@ -1603,6 +1630,8 @@ def add_applicants_bulk(
         applicant = Applicant(**app_in.model_dump(), job_id=job_id)
         if applicant.source == ApplicantSource.scheduled:
             applicant.screening_status = InterviewStatus.pending
+        elif applicant.source == ApplicantSource.functional:
+            applicant.functional_status = InterviewStatus.pending
         db.add(applicant)
         created_applicants.append(applicant)
         
@@ -1716,6 +1745,9 @@ def upload_resumes(
             # If the source is scheduled, ensure screening_status is set
             if existing_applicant.source == ApplicantSource.scheduled and not existing_applicant.screening_status:
                 existing_applicant.screening_status = InterviewStatus.pending
+            # If the source is functional, ensure functional_status is set
+            if existing_applicant.source == ApplicantSource.functional and not existing_applicant.functional_status:
+                existing_applicant.functional_status = InterviewStatus.pending
                 
             # Update candidate details if they were defaults or unset
             if parsed_email and ("@candidate.io" in existing_applicant.email or not existing_applicant.email):
@@ -1743,6 +1775,8 @@ def upload_resumes(
             )
             if applicant.source == ApplicantSource.scheduled:
                 applicant.screening_status = InterviewStatus.pending
+            elif applicant.source == ApplicantSource.functional:
+                applicant.functional_status = InterviewStatus.pending
             db.add(applicant)
             created_applicants.append(applicant)
         

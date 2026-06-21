@@ -71,20 +71,18 @@ export default function ConvaiVoiceRoom() {
         // @convai/web-sdk ships no type declarations. NOTE: confirm the exact
         // package name on install — sources differ between '@convai/web-sdk'
         // (this project's prior verified choice) and 'convai-web-sdk'.
-        // @convai/web-sdk is an optional integration whose API has drifted across
-        // versions; treat it as untyped (cast to any) so the build never breaks.
-        const mod: any = await import('@convai/web-sdk');
+        const mod = await import('@convai/web-sdk');
         if (cancelled) return;
-        const ConvaiClient: any = mod.ConvaiClient || mod.default?.ConvaiClient;
-        const client: any = new ConvaiClient({
+        const ConvaiClient = mod.ConvaiClient || (mod as any).default?.ConvaiClient;
+        const client = new ConvaiClient({
           apiKey: CONVAI_API_KEY,
           characterId: CONVAI_CHARACTER_ID,
           enableAudio: true,
           sessionId: '-1',
-        });
+        } as any);
 
         // Candidate speech-to-text arrives here as it is recognised.
-        client.setResponseCallback((response: any) => {
+        (client as any).setResponseCallback((response: any) => {
           try {
             if (response?.hasUserQuery?.()) {
               const q = response.getUserQuery?.();

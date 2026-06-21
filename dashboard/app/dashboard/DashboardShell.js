@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { initDashboardPage } from '../../src/dashboard/index.js';
+import { STAGE_SLUG_TO_TAB } from '../../src/dashboard/job-stages.js';
 import { html } from '../../src/html/dashboard-crystal';
 import { apiMe, apiLogout, isAuthed, clearAuthed } from '../../src/auth-client.js';
 
@@ -65,7 +66,7 @@ function navigateToPath(path) {
       if (subSub === 'flow') {
         window.openJobFlowView?.(jobId);
       } else {
-        window.navigateToJobDetail?.(jobId);
+        window.navigateToJobStage?.(jobId, subSub || 'overview');
       }
     } else {
       window.navigateToTab?.('jobs');
@@ -105,8 +106,12 @@ export default function DashboardShell({ children }) {
     window.__ihPushState = (url) => {
       router.push(url, { scroll: false });
     };
+    window.__ihNavigateToPath = (path) => {
+      navigateToPath(path);
+    };
     return () => {
       delete window.__ihPushState;
+      delete window.__ihNavigateToPath;
     };
   }, [router]);
 

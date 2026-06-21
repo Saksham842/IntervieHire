@@ -27,6 +27,15 @@ async function hydrateJobs() {
   try { updateJobsCounters(); } catch {}
   try { updateSummaryMetrics(); } catch {}
   showPremiumToast(`Loaded ${jobs.length} job${jobs.length !== 1 ? 's' : ''} from the live backend.`, 'success');
+
+  if (typeof window !== 'undefined' && window.__ihDashboardMounted) {
+    const segments = window.location.pathname.split('/').filter(Boolean);
+    if (segments[0] === 'dashboard' && segments[1] === 'jobs' && segments[2]) {
+      if (typeof window.__ihNavigateToPath === 'function') {
+        window.__ihNavigateToPath(window.location.pathname);
+      }
+    }
+  }
 }
 
 function showLoginOverlay() {

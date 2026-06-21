@@ -3,10 +3,18 @@ import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 
 // Abuse guards for an endpoint that spends a paid API key on every call.
-const RATE_LIMIT = 20;            // requests allowed per window, per IP
+// 120/min: multi-agent resume analysis fires up to 3 calls/resume at concurrency
+// 10, so the old 20 throttled legitimate bulk runs. DeepSeek's own account limit
+// is the real ceiling. ponytail: bump here if a batch still trips it.
+const RATE_LIMIT = 120;           // requests allowed per window, per IP
 const RATE_WINDOW_MS = 60_000;    // sliding window length
 const MAX_MESSAGES = 30;          // cap conversation length forwarded upstream
 const MAX_TOTAL_CHARS = 50_000;   // cap total prompt size forwarded upstream
+
+// Mixture-of-experts allowlist — callers pick a model per task; we never forward
+// an arbitrary model string at the paid key. v4-pro = stronger judgement,
+// v4-flash = fast/light (both support JSON mode + temperature).
+const ALLOWED_MODELS = new Set(['deepseek-v4-pro', 'deepseek-v4-flash']);
 
 // In-memory limiter. Adequate as a basic guard, but it only protects a single
 // warm serverless instance and resets on cold start — for real protection back
@@ -39,7 +47,7 @@ export async function POST(req) {
   }
 
   try {
-    const { messages, jsonMode } = await req.json();
+    const { messages, jsonMode, model } = await req.json();
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: 'messages must be an array' }, { status: 400 });
@@ -52,12 +60,8 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Prompt too large' }, { status: 413 });
     }
 
-    const payload = {
-      model: 'deepseek-chat',
-      messages,
-      temperature: 0.7,
-      max_tokens: 3000,
-    };
+    const useModel = ALLOWED_MODELS.has(model) ? model : 'deepseek-v4-flash';
+    const payload = { model: useModel, messages, temperature: 0.7, max_tokens: 3000 };
     if (jsonMode) payload.response_format = { type: 'json_object' };
 
     const upstream = await fetch('https://api.deepseek.com/v1/chat/completions', {

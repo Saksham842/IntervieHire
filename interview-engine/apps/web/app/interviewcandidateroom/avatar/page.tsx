@@ -1,10 +1,10 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Standalone avatar route: https://<site>/interviewcandidateroom/avatar
+// Standalone avatar route: https://<site>/interview/avatar
 //
 // The UE5 MetaHuman + Convai avatar runs on the HOST PC via Pixel Streaming.
 // This page does NOT render the avatar itself — it embeds the PC's public stream
@@ -32,7 +32,7 @@ function withPixelStreamingParams(rawUrl: string): string {
   }
 }
 
-function AvatarInner() {
+function AvatarRoute() {
   const params = useSearchParams();
   const [ready, setReady] = useState(false);
 
@@ -86,10 +86,10 @@ function AvatarInner() {
   );
 }
 
-export default function AvatarRoute() {
+export default function Page() {
   return (
-    <Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#05070d' }} />}>
-      <AvatarInner />
+    <Suspense fallback={<div style={{ color: '#e6edff', padding: 24, font: '14px system-ui' }}>Loading interviewer...</div>}>
+      <AvatarRoute />
     </Suspense>
   );
 }

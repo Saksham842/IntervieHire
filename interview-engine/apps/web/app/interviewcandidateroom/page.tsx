@@ -53,6 +53,7 @@ export default function Interview() {
     { speaker: 'ai', text: 'Welcome. I will ask a few structured questions. Please answer naturally with examples.' },
   ]);
   const [questionIndex, setQuestionIndex] = useState(0);
+  const [questions, setQuestions] = useState<{ text: string; tag: string; hint: string }[]>(QUESTIONS);
   const [elapsed, setElapsed] = useState(0);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
@@ -84,6 +85,41 @@ export default function Interview() {
     const queryId = params.get('sessionId') || params.get('session');
     if (queryId) setSessionId(queryId);
   }, []);
+
+  // --- Dynamic questions loading from session ---
+  useEffect(() => {
+    if (sessionId === 'demo-session') {
+      setQuestions(QUESTIONS);
+      return;
+    }
+    let alive = true;
+    async function fetchSessionQuestions() {
+      try {
+        const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive && data?.jobRole?.questions) {
+          const activeQuestions = data.jobRole.questions
+            .filter((q: any) => q.isActive !== false)
+            .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          if (activeQuestions.length > 0) {
+            const mapped = activeQuestions.map((q: any) => ({
+              text: q.text,
+              tag: q.topicCategories?.[0] || 'Technical',
+              hint: q.difficulty ? `${q.difficulty} difficulty. Take your time to answer.` : 'Think structured and explain with examples.',
+            }));
+            setQuestions(mapped);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load dynamic session questions:', err);
+      }
+    }
+    fetchSessionQuestions();
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
 
   // --- WebSocket + demo session bootstrap (unchanged proctoring contract) ---
   useEffect(() => {
@@ -298,7 +334,7 @@ export default function Interview() {
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const ss = String(elapsed % 60).padStart(2, '0');
   const clock = `${mm}:${ss}`;
-  const question = QUESTIONS[questionIndex];
+  const question = questions[questionIndex] || { text: 'No questions loaded.', tag: 'Interview', hint: 'Please wait.' };
 
   return (
     <>
@@ -494,7 +530,7 @@ export default function Interview() {
                   <h2>{question.text}</h2>
                   <div className="question-meta">
                     Question {String(questionIndex + 1).padStart(2, '0')}/
-                    {String(QUESTIONS.length).padStart(2, '0')}
+                    {String(questions.length).padStart(2, '0')}
                   </div>
                 </div>
                 <div className="tag">{question.tag}</div>
@@ -512,7 +548,7 @@ export default function Interview() {
                 <button
                   className="next-btn"
                   type="button"
-                  onClick={() => setQuestionIndex((i) => Math.min(QUESTIONS.length - 1, i + 1))}
+                  onClick={() => setQuestionIndex((i) => Math.min(questions.length - 1, i + 1))}
                 >
                   NEXT ›
                 </button>

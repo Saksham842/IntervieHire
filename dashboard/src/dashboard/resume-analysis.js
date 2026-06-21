@@ -79,23 +79,24 @@ function renderResumeStagePaneForJob(candidates, job, container) {
 
   container.innerHTML = `
     <div class="stage-table-container">
-      <div class="ra-toolbar">
-        <div class="ra-toolbar-left">
-          <span class="ra-toolbar-stat">${analysedCount} analysed</span>
-          <span class="ra-toolbar-stat pending">${pendingCount} pending</span>
+      <div class="stage-table-filters" style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: none; background: none; padding: 0;">
+        <div style="display: flex; gap: 8px;">
+          <span class="ra-toolbar-stat" style="font-size: 0.76rem; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border); padding: 3px 10px; border-radius: 12px; color: var(--color-text-muted);">${analysedCount} analysed</span>
+          <span class="ra-toolbar-stat pending" style="font-size: 0.76rem; background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border); padding: 3px 10px; border-radius: 12px; color: var(--color-text-muted);">${pendingCount} pending</span>
         </div>
-        <div class="ra-toolbar-right">
-          <button class="btn-ra-import" id="btn-ra-import" title="Import a CSV/Excel of candidates with public Google-Doc/Drive resume links">
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <div class="stage-table-actions-bar" style="margin: 0; display: flex; gap: 8px; align-items: center;">
+          <button class="btn-bulk-actions">Bulk Actions <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></button>
+          <button class="btn-ra-import" id="btn-ra-import" style="display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:0.76rem; font-weight:600; color:var(--color-text-muted); background:rgba(255,255,255,0.04); border:1px solid var(--glass-border); cursor:pointer; font-family:var(--font-body);" title="Import a CSV/Excel of candidates with public Google-Doc/Drive resume links">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             Import CSV/Excel
           </button>
           <input type="file" id="ra-import-file" accept=".csv,.xlsx,.xls" hidden />
-          ${analysedCount > 0 ? `<button class="btn-ra-reanalyse-all" id="btn-ra-reanalyse-all" title="Re-run analysis on all analysed resumes using the current parameters">
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          ${analysedCount > 0 ? `<button class="btn-ra-reanalyse-all" id="btn-ra-reanalyse-all" style="display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:0.76rem; font-weight:600; color:var(--color-text-muted); background:rgba(255,255,255,0.04); border:1px solid var(--glass-border); cursor:pointer; font-family:var(--font-body);" title="Re-run analysis on all analysed resumes using the current parameters">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             Reanalyse all (${analysedCount})
           </button>` : ''}
-          ${pendingCount > 0 ? `<button class="btn-ra-analyse-all" id="btn-ra-analyse-all">
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          ${pendingCount > 0 ? `<button class="btn-ra-analyse-all" id="btn-ra-analyse-all" style="display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:0.76rem; font-weight:600; color:var(--color-gold); background:rgba(var(--color-gold-rgb),0.08); border:1px solid rgba(var(--color-gold-rgb),0.2); cursor:pointer; font-family:var(--font-body);">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
             Analyse All (${pendingCount})
           </button>` : ''}
         </div>
@@ -607,18 +608,73 @@ function buildLocalDeepAnalysis(resumeText, job, config, criteria) {
   return result;
 }
 
-async function runResumeAnalysis(cid, job, opts = {}) {
-  const quiet = opts.quiet === true;
-  const pasteArea = document.getElementById(`ra-paste-${cid}`);
-  const btn = document.getElementById(`ra-btn-${cid}`);
-  const origHTML = btn ? btn.innerHTML : '';
-  let resumeText = ((resumeTextCache[cid] || '') + '\n' + (pasteArea?.value || '')).trim();
-  const candidate = AppState.candidates.find(c => c.id === cid);
+// DeepSeek multi-agent resume analysis: three focused passes instead of one
+// monolithic prompt — extract (facts) → score (judgement, reasoning model) →
+// critique (recruiter narrative + sanity check). Each pass does one job, so the
+// model isn't juggling parsing + scoring + writing at once. Merged into the exact
+// shape normalizeDeepResult expects, so scoring/persistence/render are unchanged.
+// Any pass that throws bubbles up; the caller degrades to the local engine.
+async function runResumeMultiAgent(resumeText, job, criteria, criteriaBlock) {
+  const resume = resumeText.slice(0, 5000);
 
-  // Candidates imported via CSV/Excel carry a resume link but no uploaded text.
-  // Fetch + extract the linked doc server-side (public Google Docs/Drive) first.
-  if ((!resumeText || isGarbageText(resumeText)) && candidate?.resumeLink) {
-    if (btn) { btn.disabled = true; btn.innerHTML = `<span class="ra-spinner"></span> Fetching…`; }
+  const extract = parseAIJson(await callDeepSeekAPI([
+    { role: 'system', content: `You are a resume parser. Extract ONLY facts literally present in the resume — never score, judge, or invent skills. Respond ONLY with JSON:
+{"experienceYears":"e.g. 4 years","education":["degree/cert lines"],"projects":[{"name":"","summary":"1 line","skills":[""]}],"skillsDetected":["max 8 concrete skills present in the resume"]}` },
+    { role: 'user', content: `--- RESUME ---\n${resume}` },
+  ], true, 'resumeExtract'));
+
+  const score = parseAIJson(await callDeepSeekAPI([
+    { role: 'system', content: `You are Lina, a rigorous recruiting analyst. Using ONLY the extracted facts and resume, judge how this candidate maps to THIS role. Score each dimension 0-100 INDEPENDENTLY — do NOT compute an overall; the platform applies the recruiter's weights. Missing evidence = low score, never benefit of the doubt. Respond ONLY with JSON:
+{"dimensions":{"mustHave":{"score":0,"evidence":""},"niceToHave":{"score":0,"evidence":""},"projects":{"score":0,"evidence":""},"experience":{"score":0,"evidence":""},"education":{"score":0,"evidence":""},"custom":{"score":0,"evidence":""}},"criteriaVerdicts":[{"criterion":"","group":"mustHave|goodToHave|custom","met":true,"evidence":""}],"competencies":[{"name":"","score":0,"bullets":[""]}],"redFlagsDetected":["only red-flag items actually found"],"skills":{"matched":["criteria with evidence"],"missing":["criteria lacking evidence"]}}
+criteriaVerdicts: ONE entry per must-have, good-to-have and custom criterion. competencies: 4-6 role-specific, each with 2-4 evidence bullets.` },
+    { role: 'user', content: `JOB: ${job.cardName} (${job.roleName})
+Experience Required: ${job.experienceBand}
+Description: ${job.description || '(Not provided)'}${criteriaBlock}
+
+--- EXTRACTED FACTS ---
+${JSON.stringify(extract)}
+
+--- RESUME ---
+${resume}` },
+  ], true, 'resumeScore'));
+
+  const critique = parseAIJson(await callDeepSeekAPI([
+    { role: 'system', content: `You are a hiring-panel lead. Given the dimension scores and evidence, write the recruiter-facing narrative and call out any over-generous scoring in your wording. Respond ONLY with JSON:
+{"summary":"2-3 sentences with specific evidence","strengths":["3-5 evidence-backed"],"improvements":["2-4 specific gaps"],"interviewProbes":["3-4 questions to verify weak evidence"],"recommendationBullets":["3-4 executive-summary bullets"],"recommendationReason":"1 sentence"}` },
+    { role: 'user', content: `JOB: ${job.roleName}
+--- SCORES ---
+${JSON.stringify(score)}
+--- FACTS ---
+${JSON.stringify(extract)}` },
+  ], true, 'resumeCritique'));
+
+  return {
+    summary: critique.summary,
+    experienceYears: extract.experienceYears,
+    dimensions: score.dimensions,
+    criteriaVerdicts: score.criteriaVerdicts,
+    competencies: score.competencies,
+    redFlagsDetected: score.redFlagsDetected,
+    projects: extract.projects,
+    skills: {
+      detected: extract.skillsDetected,
+      matched: score.skills && score.skills.matched,
+      missing: score.skills && score.skills.missing,
+    },
+    strengths: critique.strengths,
+    improvements: critique.improvements,
+    interviewProbes: critique.interviewProbes,
+    recommendationBullets: critique.recommendationBullets,
+    recommendationReason: critique.recommendationReason,
+  };
+}
+
+// Resolve a candidate's resume text from the fastest source available: cached
+// upload/paste, else a fetched public link, else the backend's stored copy.
+// Returns '' when nothing usable is found. Pure I/O — no LLM.
+async function ensureResumeText(cid, candidate) {
+  let text = ((resumeTextCache[cid] || '') + '\n' + (document.getElementById(`ra-paste-${cid}`)?.value || '')).trim();
+  if ((!text || isGarbageText(text)) && candidate?.resumeLink) {
     try {
       const res = await fetch('/api/fetch-doc', {
         method: 'POST',
@@ -626,33 +682,50 @@ async function runResumeAnalysis(cid, job, opts = {}) {
         body: JSON.stringify({ url: candidate.resumeLink }),
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.text) {
-        resumeTextCache[cid] = data.text;
-        resumeText = data.text.trim();
-      } else if (!quiet) {
-        showPremiumToast(data.error || 'Could not fetch the linked resume.', 'error');
-      }
-    } catch {
-      if (!quiet) showPremiumToast('Could not fetch the linked resume.', 'error');
-    }
+      if (res.ok && data.text) { resumeTextCache[cid] = data.text; text = data.text.trim(); }
+    } catch { /* fall through to the no-text path */ }
   }
-
-  // Backend candidates carry no local resume text (it lives server-side). Pull the
-  // real parsed text instead of fabricating one, so the score reflects the actual
-  // resume rather than synthetic filler.
-  if ((!resumeText || isGarbageText(resumeText)) && candidate && candidate._backend && getDataSource() === 'api') {
+  if ((!text || isGarbageText(text)) && candidate && candidate._backend && getDataSource() === 'api') {
     try {
       const serverText = await apiGetResumeText(cid);
-      if (serverText && !isGarbageText(serverText)) {
-        resumeTextCache[cid] = serverText;
-        resumeText = serverText.trim();
-      }
-    } catch (e) {
-      console.warn('resume-text fetch failed', e);
-    }
+      if (serverText && !isGarbageText(serverText)) { resumeTextCache[cid] = serverText; text = serverText.trim(); }
+    } catch (e) { console.warn('resume-text fetch failed', e); }
   }
+  return (!text || isGarbageText(text)) ? '' : text;
+}
 
-  if (!resumeText || isGarbageText(resumeText)) {
+// Fast first pass for bulk analyse: fetch each resume and parse ONLY name + id
+// into the list, so the recruiter sees WHO is being processed before the slow
+// scoring starts. No LLM — just identity extraction (bounded concurrency).
+async function prefetchIdentities(cids) {
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < cids.length) {
+      const cid = cids[cursor++];
+      const candidate = AppState.candidates.find(c => c.id === cid);
+      if (!candidate) continue;
+      try {
+        const text = await ensureResumeText(cid, candidate);
+        if (text) cacheResumeTextAndIdentity(cid, text); // sets name/email + refreshes the row
+      } catch { /* one failed identity shouldn't block the rest */ }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(RESUME_ANALYSIS_CONCURRENCY, cids.length) }, () => worker()));
+}
+
+async function runResumeAnalysis(cid, job, opts = {}) {
+  const quiet = opts.quiet === true;
+  const btn = document.getElementById(`ra-btn-${cid}`);
+  const origHTML = btn ? btn.innerHTML : '';
+  const candidate = AppState.candidates.find(c => c.id === cid);
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="ra-spinner"></span> Fetching…`; }
+
+  const resumeText = await ensureResumeText(cid, candidate);
+  // Parse name/id from the resume up front so the row shows the real candidate
+  // before scoring (no-op if the bulk prefetch already did it).
+  if (resumeText) cacheResumeTextAndIdentity(cid, resumeText);
+
+  if (!resumeText) {
     if (!quiet) showPremiumToast('Upload a resume, paste text, or add a valid public resume link.', 'error');
     if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
     return false;
@@ -670,63 +743,9 @@ async function runResumeAnalysis(cid, job, opts = {}) {
   appendTerminalLog(`<code>[${new Date().toLocaleTimeString()}] Lina:</code> Initiated deep resume analysis for <strong>${candidate ? escapeHTML(candidate.name) : cid}</strong>...`);
   appendTerminalLog(`<code>[${new Date().toLocaleTimeString()}] Lina:</code> Scoring ${criteria.mustHave.length + criteria.goodToHave.length + config.customCriteria.length} criteria across 6 weighted dimensions for <strong>${escapeHTML(job.roleName)}</strong>...`);
 
-  const systemPrompt = `You are Lina, an expert recruiting analyst for IntervieHire. You perform rigorous, evidence-first resume screening FOR RECRUITERS — they need to understand exactly how this candidate's real work history maps to THEIR role.
-
-THINK DEEPLY, THEN REPORT:
-- For every project in the resume, reason about what it actually proves: scale, the candidate's own contribution, and how directly it transfers to this specific role.
-- Quote or paraphrase concrete resume evidence — never generic praise.
-- Score each dimension 0-100 INDEPENDENTLY. Do NOT compute an overall score; the platform combines dimensions using the recruiter's own weights.
-- Be honest. Thin or auto-generated resumes get low dimension scores and a note in the summary. Missing evidence = low score, not benefit of the doubt.
-
-DIMENSIONS (score each 0-100 with 1-line evidence):
-- mustHave: coverage of the MUST HAVE list (100 = all clearly evidenced)
-- niceToHave: coverage of GOOD TO HAVE list
-- projects: how relevant the candidate's actual projects are to this role's day-to-day work
-- experience: depth/seniority vs the required experience band
-- education: degrees and certifications relevant to the role
-- custom: performance against the RECRUITER CUSTOM CRITERIA only (ignore if none listed)
-
-STRICT RULES:
-- criteriaVerdicts must contain ONE entry per must-have, good-to-have and custom criterion with met true/false/"partial" and short evidence.
-- "missing" lists ONLY criteria from the configured lists that lack evidence. Never invent skills.
-- redFlagsDetected: ONLY items from the RED FLAGS list actually found.
-- competencies: 4-6 role-specific competencies you derive from the job description, each with score and 2-4 evidence bullets.
-
-Respond ONLY with valid JSON, no markdown fences:
-{
-  "summary": "2-3 sentences with specific evidence",
-  "experienceYears": "e.g. 4 years",
-  "dimensions": {
-    "mustHave": {"score": 0, "evidence": ""}, "niceToHave": {"score": 0, "evidence": ""},
-    "projects": {"score": 0, "evidence": ""}, "experience": {"score": 0, "evidence": ""},
-    "education": {"score": 0, "evidence": ""}, "custom": {"score": 0, "evidence": ""}
-  },
-  "criteriaVerdicts": [{"criterion": "", "group": "mustHave|goodToHave|custom", "met": true, "evidence": ""}],
-  "projects": [{"name": "", "summary": "1 line", "relevance": 0, "whyItMatters": "what this proves for OUR role", "skills": [""]}],
-  "skills": {"detected": ["max 8 other relevant skills"], "matched": ["criteria with evidence"], "missing": ["criteria lacking evidence"]},
-  "redFlagsDetected": [],
-  "competencies": [{"name": "", "score": 0, "bullets": [""]}],
-  "strengths": ["3-5 evidence-backed strengths"],
-  "improvements": ["2-4 specific gaps"],
-  "interviewProbes": ["3-4 questions to verify weak evidence in the next round"],
-  "recommendationBullets": ["3-4 executive-summary bullets for the hiring panel"],
-  "recommendationReason": "1 sentence"
-}`;
-
-  const userMsg = `JOB: ${job.cardName} (${job.roleName})
-Experience Required: ${job.experienceBand}
-Description: ${job.description || '(Not provided)'}${criteriaBlock}
-
---- CANDIDATE RESUME ---
-${resumeText.slice(0, 5000)}`;
-
   let result;
   try {
-    const raw = await callDeepSeekAPI(
-      [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMsg }],
-      true
-    );
-    result = parseAIJson(raw);
+    result = await runResumeMultiAgent(resumeText, job, criteria, criteriaBlock);
     result.engine = 'deepseek';
     normalizeDeepResult(result, config, criteria);
   } catch (err) {
@@ -857,10 +876,12 @@ function renderAnalysisResult(cid, result) {
   }
 }
 
-// How many resumes to analyse concurrently. Parallel calls cut wall-clock time
-// roughly N-fold, but firing every resume at once risks DeepSeek rate-limiting
-// (a 429 silently falls back to the lower-quality local engine), so we cap it.
-const RESUME_ANALYSIS_CONCURRENCY = 4;
+// How many resumes to analyse concurrently. Each resume is now a 3-call
+// multi-agent chain, so 10 concurrent ≈ up to 30 in-flight calls — the proxy
+// (RATE_LIMIT 120/min) + a 429 retry in callDeepSeekAPI absorb that without
+// silently degrading to the local engine. ponytail: DeepSeek's account rate is
+// the real ceiling; raise both this and RATE_LIMIT together if you push higher.
+const RESUME_ANALYSIS_CONCURRENCY = 10;
 
 async function runBulkResumeAnalysis(candidateIds, job, opts = {}) {
   const force = opts.force === true;
@@ -871,6 +892,13 @@ async function runBulkResumeAnalysis(candidateIds, job, opts = {}) {
     return;
   }
   const total = pending.length;
+
+  // Phase 1 — names first: parse every candidate's name + id into the list right
+  // away so the recruiter sees who's being processed; the scoring follows.
+  showPremiumToast(`Listing ${total} candidate name${total > 1 ? 's' : ''}…`, 'info');
+  await prefetchIdentities(pending);
+
+  // Phase 2 — the slow per-candidate scoring.
   showPremiumToast(`${force ? 'Reanalysing' : 'Analysing'} ${total} candidate${total > 1 ? 's' : ''} (${Math.min(RESUME_ANALYSIS_CONCURRENCY, total)} at a time)…`, 'info');
 
   // Bounded-concurrency worker pool: each worker pulls the next candidate off a

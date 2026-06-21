@@ -176,6 +176,34 @@ export async function apiGetResumeText(applicantId) {
   return (data && data.text) || '';
 }
 
+// Upload one or more resume files to a job's applicant pool.
+// `source` controls what stage new candidates land in:
+//   'scheduled'  → Recruiter Screening (screening_status = pending)
+//   'functional' → Functional Interview (functional_status = pending)
+//   (default)    → Resume Analysis (bulk_upload, no status set)
+// Uses raw fetch so FormData is sent as multipart/form-data — the JSON
+// `request()` helper would override Content-Type and break the upload.
+export async function apiUploadResumes(jobId, files, source = null) {
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+  const url = `${API_BASE}/jobs/${jobId}/applicants/upload-resumes${source ? `?source=${encodeURIComponent(source)}` : ''}`;
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', body: formData, credentials: 'include' });
+  } catch (err) {
+    throw new Error(`Network error uploading resumes: ${err.message}`);
+  }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) {
+    const msg = (data && (data.detail || data.error || data.message)) || `${res.status} ${res.statusText}`;
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+  return Array.isArray(data) ? data.map(mapApplicantOutToCandidate) : [];
+}
+
+
 // ── Mappers: backend (snake_case) ⇄ dashboard (camelCase) ──────────────────
 const arr = (v) => (Array.isArray(v) ? v : []);
 
@@ -221,6 +249,22 @@ function mapScreeningParamsIn(sp) {
     category: category.charAt(0).toUpperCase() + category.slice(1),
     params: arr(params).map((p) => ({ name: p.parameter || p.name || '', required: !!p.required, flexibility: '', preferredResponse: p.preferred_response || p.preferredResponse || '' })),
   }));
+}
+
+// Dashboard screeningParams → backend screening_parameters (reverse of
+// mapScreeningParamsIn). Without this the screening grid — including recruiter
+// custom params — only lived in localStorage and never reached the backend.
+function mapScreeningParamsOut(screeningParams) {
+  const out = {};
+  arr(screeningParams).forEach((cat) => {
+    if (!cat || !cat.category) return;
+    out[cat.category.toLowerCase()] = arr(cat.params).map((p) => ({
+      parameter: p.name || '',
+      preferred_response: p.preferredResponse || '',
+      required: !!p.required,
+    }));
+  });
+  return out;
 }
 
 // Backend functional_parameters.topics[] → dashboard functionalParameters via the
@@ -270,6 +314,9 @@ function mapJobToParametersPayload(job) {
       must_have: arr(rc.mustHave), red_flags: arr(rc.redFlags), good_to_have: arr(rc.goodToHave),
       ...(job.scoringConfig ? { scoring_config: job.scoringConfig } : {}),
     },
+    // Only send when present — the handler skips null fields, so a save from a
+    // job without screening params loaded won't wipe the backend's copy.
+    ...(arr(job.screeningParams).length ? { screening_parameters: mapScreeningParamsOut(job.screeningParams) } : {}),
   };
 }
 
@@ -297,9 +344,8 @@ function mapApplicantOutToCandidate(a = {}) {
     // (advanced past resume); exact Screening-vs-Functional persists once scheduled.
     status: a.decision === 'hired' ? 'Hired'
       : a.decision === 'rejected' ? 'Rejected'
-      : a.functional_status === 'completed' ? 'Functional'
-      : a.screening_status === 'completed' ? 'Screening'
-      : a.decision === 'shortlisted' ? 'Screening'
+      : a.functional_status ? 'Functional'
+      : (a.screening_status || a.decision === 'shortlisted') ? 'Screening'
       : 'Resume',
     source: a.source || 'ATS',
     interviewStatus: mapInterviewStatus(a.functional_status),
@@ -307,6 +353,14 @@ function mapApplicantOutToCandidate(a = {}) {
     cheatProbability: a.cheat_probability ? a.cheat_probability.charAt(0).toUpperCase() + a.cheat_probability.slice(1) : null,
     matchScore: a.match_score ?? null,
     decision: a.decision ?? null,
+    // Recruiter screening result — the backend sends these (ApplicantOut), the
+    // dashboard's report + Deep Analysis read them off the candidate. Without this
+    // mapping the screening block stays blank in api mode even when scored.
+    recruiterScreening: a.recruiter_screening ?? null,
+    recruiterScreeningScore: a.recruiter_screening_score ?? null,
+    screeningStatus: mapInterviewStatus(a.screening_status),
+    screeningScore: a.screening_score ?? null,
+    attemptedAt: a.attempted_at ?? null,
     // Rehydrate the stored analysis so a re-opened report shows the saved result
     // instead of re-scoring from scratch.
     ...(() => { try { const p = a.resume_analysis_report ? JSON.parse(a.resume_analysis_report) : null; return p ? { resumeAnalysis: p } : {}; } catch { return {}; } })(),
