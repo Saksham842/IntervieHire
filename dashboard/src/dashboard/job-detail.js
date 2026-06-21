@@ -43,12 +43,12 @@ function navigateToJobDetail(jobId, stage = 'overview') {
   breadcrumb.innerHTML = `<span class="breadcrumb-link" id="bc-jobs-link">Jobs</span>
     <span class="breadcrumb-separator">/</span> <span class="breadcrumb-link" id="bc-jobname-link">${shortName}</span>
     <span class="breadcrumb-separator">/</span> Responses`;
-  document.getElementById('bc-jobs-link').addEventListener('click', () => navigateToTab('jobs'));
+  document.getElementById('bc-jobs-link').addEventListener('click', () => {
+    navigateToTab('jobs');
+    pushUrl('/dashboard/jobs');
+  });
   document.getElementById('bc-jobname-link').addEventListener('click', () => {
-    document.querySelectorAll('.jd-tab').forEach(t => t.classList.remove('active'));
-    document.querySelector('.jd-tab[data-jd-tab="overview"]').classList.add('active');
-    document.querySelectorAll('.jd-pane').forEach(p => p.classList.remove('active'));
-    document.getElementById('jd-pane-overview').classList.add('active');
+    navigateToJobStage(job.id, 'overview');
     soundEngine.playClick();
   });
 

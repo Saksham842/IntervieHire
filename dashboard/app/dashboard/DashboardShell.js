@@ -65,11 +65,8 @@ function navigateToPath(path) {
     if (jobId) {
       if (subSub === 'flow') {
         window.openJobFlowView?.(jobId);
-      } else if (subSub && STAGE_SLUG_TO_TAB[subSub]) {
-        // Deep link to a specific job stage, e.g. .../functional-interview
-        window.navigateToJobStage?.(jobId, subSub);
       } else {
-        window.navigateToJobDetail?.(jobId);
+        window.navigateToJobStage?.(jobId, subSub || 'overview');
       }
     } else {
       window.navigateToTab?.('jobs');
@@ -109,8 +106,12 @@ export default function DashboardShell({ children }) {
     window.__ihPushState = (url) => {
       router.push(url, { scroll: false });
     };
+    window.__ihNavigateToPath = (path) => {
+      navigateToPath(path);
+    };
     return () => {
       delete window.__ihPushState;
+      delete window.__ihNavigateToPath;
     };
   }, [router]);
 

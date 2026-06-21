@@ -22,9 +22,23 @@ let currentSourcingTab = 'csv';
 
 function initSourcing() {
   // Bind click on '+ Add Applicants' inside job detail overview
-  const addApplicantsBtn = document.querySelector('.btn-jd-primary');
+  const addApplicantsBtn = document.querySelector('.jd-actions .btn-jd-primary') || document.querySelector('.btn-jd-primary');
   if (addApplicantsBtn) {
-    addApplicantsBtn.addEventListener('click', () => {
+    addApplicantsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const activeTabEl = document.querySelector('.jd-tab.active');
+      const tabId = activeTabEl ? activeTabEl.getAttribute('data-jd-tab') : 'overview';
+      if (['resume', 'screening', 'functional'].includes(tabId)) {
+        const inlineBtn = document.getElementById(`btn-add-applicants-${tabId}`);
+        if (inlineBtn) {
+          inlineBtn.click();
+          const panel = document.getElementById(`add-applicants-panel-${tabId}`);
+          if (panel) {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          return;
+        }
+      }
       navigateToSourcing(AppState.activeJobId);
     });
   }
@@ -34,13 +48,18 @@ function initSourcing() {
   if (srcBcJobs) {
     srcBcJobs.addEventListener('click', () => {
       navigateToTab('jobs');
+      pushUrl('/dashboard/jobs');
     });
   }
   
   const srcBcJobname = document.getElementById('src-bc-jobname');
   if (srcBcJobname) {
     srcBcJobname.addEventListener('click', () => {
-      navigateToJobDetail(AppState.activeJobId);
+      if (typeof window.navigateToJobStage === 'function') {
+        window.navigateToJobStage(AppState.activeJobId, 'overview');
+      } else {
+        navigateToJobDetail(AppState.activeJobId);
+      }
     });
   }
 

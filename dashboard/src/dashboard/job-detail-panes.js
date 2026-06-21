@@ -38,6 +38,7 @@ function renderJobDetailPanes(job) {
   if (resumeList) {
     const resumeCands = jobCandidates.filter(c => c.status === 'Resume');
     const criteria = job.resumeCriteria || { mustHave: [], redFlags: [], goodToHave: [], goodToHaveMinMatch: 1 };
+    const addApplicantsHTML = buildAddApplicantsPanel('resume', resumeCands.length);
 
     const criteriaHTML = `
       <div class="ra-config-section">
@@ -122,13 +123,8 @@ function renderJobDetailPanes(job) {
         </div>
       </div>
 
-      <div class="ra-candidates-section">
-        <div class="ra-candidates-header">
-          <h3 class="ra-candidates-title">Candidates in Resume Analysis</h3>
-          <span class="ra-candidates-count">${resumeCands.length} candidate${resumeCands.length !== 1 ? 's' : ''}</span>
-        </div>
-        <div class="jd-stage-candidates-list" id="list-stage-resume-candidates"></div>
-      </div>
+      ${addApplicantsHTML}
+      <div class="jd-stage-candidates-list" id="list-stage-resume-candidates" style="margin-top: -8px;"></div>
     `;
 
     resumeList.innerHTML = criteriaHTML;
@@ -721,6 +717,9 @@ function renderJobDetailPanes(job) {
   // stage lists. buildAddApplicantsPanel injects the markup; without these bind
   // calls the button, dropzone, file picker, and Import are inert. Source values:
   // 'scheduled' → Recruiter Screening, 'functional' → Functional Interview.
+  if (document.getElementById('list-stage-resume')) {
+    bindAddApplicantsPanel(job, 'resume', null, 'Resume Analysis');
+  }
   if (document.getElementById('list-stage-screening')) {
     bindAddApplicantsPanel(job, 'screening', 'scheduled', 'Recruiter Screening');
   }
@@ -836,7 +835,9 @@ export { renderJobDetailPanes, updateCandidateStatus };
 // Builds an inline upload panel header + collapsible dropzone for any stage.
 // `paneKey` is 'screening' or 'functional' (used as HTML id prefix).
 function buildAddApplicantsPanel(paneKey, count) {
-  const label = paneKey === 'screening' ? 'Recruiter Screening' : 'Functional Interview';
+  const label = paneKey === 'screening' ? 'Recruiter Screening'
+              : paneKey === 'functional' ? 'Functional Interview'
+              : 'Resume Analysis';
   return `
     <div class="ra-candidates-section" style="margin-bottom:16px;">
       <div class="ra-candidates-header">
