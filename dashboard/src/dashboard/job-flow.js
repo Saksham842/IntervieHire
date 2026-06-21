@@ -10,7 +10,7 @@ import { renderJobCards } from './render-views.js';
 import { soundEngine } from './sound.js';
 import { navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
-import { getDataSource, ENGINE_WEB_URL } from './api.js';
+import { getDataSource, ENGINE_WEB_URL, apiCreateTestSession } from './api.js';
 import { ensureFunctionalBlueprint, computeCalibration } from './blueprint-engine.js';
 import { pushUrl } from './url-sync.js';
 import { openReportDrawerForCandidate } from './report.js';
@@ -1329,10 +1329,36 @@ function renderScreeningConfig(job, panel) {
 
   } else if (activeTab === 'test') {
     const tryBtn = panel.querySelector('#btn-try-interview-now');
-    const urlInput = panel.querySelector('#test-interview-url');
-    if (tryBtn && urlInput) {
-      tryBtn.addEventListener('click', () => {
-        window.open(urlInput.value, '_blank');
+    if (tryBtn) {
+      tryBtn.addEventListener('click', async () => {
+        tryBtn.disabled = true;
+        const originalText = tryBtn.innerHTML;
+        tryBtn.innerHTML = `<span class="spinner-tiny" style="border: 2px solid rgba(255,255,255,0.1); border-top-color: #818cf8; border-radius: 50%; width: 12px; height: 12px; display: inline-block; animation: spin-mini 1s linear infinite; margin-right: 6px;"></span> Preparing...`;
+        
+        try {
+          let url = '';
+          if (getDataSource() === 'api') {
+            const sessionId = await apiCreateTestSession(job.id);
+            if (sessionId) {
+              url = `${ENGINE_WEB_URL}/interview?sessionId=${encodeURIComponent(sessionId)}`;
+            } else {
+              url = `${ENGINE_WEB_URL}/interview`;
+            }
+          } else {
+            url = `${ENGINE_WEB_URL}/interview`;
+          }
+          
+          window.open(url, '_blank');
+          showPremiumToast('Test interview launched in a new tab.', 'success');
+        } catch (err) {
+          console.error('Failed to create test session:', err);
+          const interviewSlug = (job.roleName || 'role').toLowerCase().replace(/[^a-z0-9]+/g, '-') + job.id.slice(0, 6);
+          const interviewLink = `${ENGINE_WEB_URL}/interview/${interviewSlug}`;
+          window.open(interviewLink, '_blank');
+        } finally {
+          tryBtn.disabled = false;
+          tryBtn.innerHTML = originalText;
+        }
       });
     }
 
@@ -1763,10 +1789,36 @@ function renderFunctionalConfig(job, panel) {
     });
   } else if (activeTab === 'test') {
     const tryBtn = panel.querySelector('#btn-try-interview-now');
-    const urlInput = panel.querySelector('#test-interview-url');
-    if (tryBtn && urlInput) {
-      tryBtn.addEventListener('click', () => {
-        window.open(urlInput.value, '_blank');
+    if (tryBtn) {
+      tryBtn.addEventListener('click', async () => {
+        tryBtn.disabled = true;
+        const originalText = tryBtn.innerHTML;
+        tryBtn.innerHTML = `<span class="spinner-tiny" style="border: 2px solid rgba(255,255,255,0.1); border-top-color: #818cf8; border-radius: 50%; width: 12px; height: 12px; display: inline-block; animation: spin-mini 1s linear infinite; margin-right: 6px;"></span> Preparing...`;
+        
+        try {
+          let url = '';
+          if (getDataSource() === 'api') {
+            const sessionId = await apiCreateTestSession(job.id);
+            if (sessionId) {
+              url = `${ENGINE_WEB_URL}/interview?sessionId=${encodeURIComponent(sessionId)}`;
+            } else {
+              url = `${ENGINE_WEB_URL}/interview`;
+            }
+          } else {
+            url = `${ENGINE_WEB_URL}/interview`;
+          }
+          
+          window.open(url, '_blank');
+          showPremiumToast('Test interview launched in a new tab.', 'success');
+        } catch (err) {
+          console.error('Failed to create test session:', err);
+          const interviewSlug = (job.roleName || 'role').toLowerCase().replace(/[^a-z0-9]+/g, '-') + job.id.slice(0, 6);
+          const interviewLink = `${ENGINE_WEB_URL}/interview/${interviewSlug}`;
+          window.open(interviewLink, '_blank');
+        } finally {
+          tryBtn.disabled = false;
+          tryBtn.innerHTML = originalText;
+        }
       });
     }
 
