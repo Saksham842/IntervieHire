@@ -8,6 +8,8 @@ import { initCrystalAnimations } from './animations.js';
 import { drawFunnelSVG, drawScoreDistributionSVG } from './funnel-charts.js';
 import { navigateToJobDetail } from './job-detail.js';
 import { renderJobDetailPanes } from './job-detail-panes.js';
+import { pushUrl } from './url-sync.js';
+import { jobStageUrl } from './job-stages.js';
 import { openJobFlowView } from './job-flow.js';
 import { initKanbanDragAndDrop, renderColumnsSelectorDropdowns, stopActiveCardPlayer } from './kanban-dnd.js';
 import { handleSwarmPrompt, recalculateJobPipelines, renderKanbanBoard, startSwarmLogs, toggleWaveformAudio } from './kanban-swarm.js';
@@ -1026,6 +1028,9 @@ function initMountBindings() {
       document.querySelectorAll('.jd-pane').forEach(p => p.classList.remove('active'));
       const pane = document.getElementById(`jd-pane-${tabId}`);
       if (pane) pane.classList.add('active');
+      // Reflect the stage in the URL so each tab is a deep-linkable route
+      // (back/forward works). navigateToPath sees the same active tab and no-ops.
+      if (AppState.activeJobId) pushUrl(jobStageUrl(AppState.activeJobId, tabId));
       soundEngine.playClick();
       
       // Stop any active card audio playing

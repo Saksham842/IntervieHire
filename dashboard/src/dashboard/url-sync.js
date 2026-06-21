@@ -56,9 +56,10 @@ export function pushUrl(url) {
 function patchJobDetailNav() {
   const original = window.navigateToJobDetail;
   if (!original || original.__urlPatched) return;
-  window.navigateToJobDetail = function(jobId) {
-    original(jobId);
-    pushUrl(`/dashboard/jobs/${jobId}`);
+  // navigateToJobDetail already pushes the (stage-aware) URL internally, so the
+  // wrapper only forwards the optional `stage` argument through.
+  window.navigateToJobDetail = function(jobId, stage) {
+    original(jobId, stage);
   };
   window.navigateToJobDetail.__urlPatched = true;
 }

@@ -1,6 +1,6 @@
 import { initRuntime, disposeRuntime, setTimeout } from './runtime.js';
 import { AppState } from './state.js';
-import { navigateToJobDetail } from './job-detail.js';
+import { navigateToJobDetail, navigateToJobStage } from './job-detail.js';
 import { openReportDrawerForCandidate } from './report.js';
 import { openJobFlowView } from './job-flow.js';
 import { navigateToSourcing, removeCandidateFromQueue } from './sourcing.js';
@@ -18,6 +18,7 @@ export function initDashboardPage() {
   window.navigateToTab = navigateToTab;
   window.navigateToSubtab = navigateToSubtab;
   window.navigateToJobDetail = navigateToJobDetail;
+  window.navigateToJobStage = navigateToJobStage;
   window.openReportDrawerForCandidate = openReportDrawerForCandidate;
   window.openJobFlowView = openJobFlowView;
   window.navigateToSourcing = navigateToSourcing;
@@ -36,6 +37,7 @@ export function initDashboardPage() {
     delete window.navigateToTab;
     delete window.navigateToSubtab;
     delete window.navigateToJobDetail;
+    delete window.navigateToJobStage;
     delete window.openReportDrawerForCandidate;
     delete window.AppState;
     delete window.IHApi;

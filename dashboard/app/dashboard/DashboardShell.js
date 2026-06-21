@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { initDashboardPage } from '../../src/dashboard/index.js';
+import { STAGE_SLUG_TO_TAB } from '../../src/dashboard/job-stages.js';
 import { html } from '../../src/html/dashboard-crystal';
 import { apiMe, apiLogout, isAuthed, clearAuthed } from '../../src/auth-client.js';
 
@@ -64,6 +65,9 @@ function navigateToPath(path) {
     if (jobId) {
       if (subSub === 'flow') {
         window.openJobFlowView?.(jobId);
+      } else if (subSub && STAGE_SLUG_TO_TAB[subSub]) {
+        // Deep link to a specific job stage, e.g. .../functional-interview
+        window.navigateToJobStage?.(jobId, subSub);
       } else {
         window.navigateToJobDetail?.(jobId);
       }

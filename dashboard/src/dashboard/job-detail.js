@@ -10,18 +10,22 @@ import { isApiMode, apiFetchApplicants } from './api.js';
 import { showPremiumToast } from './sourcing.js';
 import { pushUrl } from './url-sync.js';
 import { recalculateJobPipelines } from './kanban-swarm.js';
+import { STAGE_SLUG_TO_TAB, jobStageUrl } from './job-stages.js';
 
 // ==========================================
 // JOB DETAIL VIEW
 // ==========================================
 
-function navigateToJobDetail(jobId) {
+function navigateToJobDetail(jobId, stage = 'overview') {
   const job = AppState.jobs.find(j => j.id === jobId);
   if (!job) return;
 
+  // Resolve the requested stage to a valid tab id; default to Overview.
+  const initialTab = document.querySelector(`.jd-tab[data-jd-tab="${stage}"]`) ? stage : 'overview';
+
   AppState.activeJobId = jobId;
   AppState.activeTab = 'job-detail';
-  pushUrl(`/dashboard/jobs/${jobId}`);
+  pushUrl(jobStageUrl(jobId, initialTab));
 
   // Recalculate pipelines first based on current AppState.candidates
   recalculateJobPipelines();
@@ -78,11 +82,11 @@ function navigateToJobDetail(jobId) {
   if (tabScreening) tabScreening.style.display = cfg.recruiterScreening?.enabled !== false ? '' : 'none';
   if (tabFunctional) tabFunctional.style.display = cfg.functionalInterview?.enabled !== false ? '' : 'none';
 
-  // Reset to Overview tab
+  // Activate the requested stage tab (defaults to Overview).
   document.querySelectorAll('.jd-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector('.jd-tab[data-jd-tab="overview"]').classList.add('active');
+  document.querySelector(`.jd-tab[data-jd-tab="${initialTab}"]`)?.classList.add('active');
   document.querySelectorAll('.jd-pane').forEach(p => p.classList.remove('active'));
-  document.getElementById('jd-pane-overview').classList.add('active');
+  document.getElementById(`jd-pane-${initialTab}`)?.classList.add('active');
 
   const jobCandidates = filterCandidatesByDateRange(AppState.candidates).filter(c => {
     if (isApiMode() && job._backend) {
@@ -151,4 +155,27 @@ async function hydrateBackendApplicants(job) {
 }
 
 
-export { navigateToJobDetail };
+// Deep-link / tab entry point: open `jobId` at the given URL stage slug
+// (e.g. 'functional-interview'). On first open it delegates to
+// navigateToJobDetail; for an already-open job it just switches the tab/pane
+// so URL-driven navigation stays idempotent (no double render, no loop).
+function navigateToJobStage(jobId, slug) {
+  const tabId = STAGE_SLUG_TO_TAB[slug] || 'overview';
+  const alreadyOpen = AppState.activeJobId === jobId &&
+    document.getElementById('view-job-detail')?.classList.contains('active-view');
+  if (!alreadyOpen) {
+    navigateToJobDetail(jobId, tabId);
+    return;
+  }
+  const tab = document.querySelector(`.jd-tab[data-jd-tab="${tabId}"]`);
+  if (!tab || tab.classList.contains('active')) return; // already on this stage
+  document.querySelectorAll('.jd-tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  document.querySelectorAll('.jd-pane').forEach(p => p.classList.remove('active'));
+  document.getElementById(`jd-pane-${tabId}`)?.classList.add('active');
+  pushUrl(jobStageUrl(jobId, tabId));
+  const job = AppState.jobs.find(j => j.id === jobId);
+  if (job) renderJobDetailPanes(job);
+}
+
+export { navigateToJobDetail, navigateToJobStage };
