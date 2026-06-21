@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Standalone avatar route: https://<site>/interview/avatar
+// Standalone avatar route: https://<site>/interviewcandidateroom/avatar
 //
 // The UE5 MetaHuman + Convai avatar runs on the HOST PC via Pixel Streaming.
 // This page does NOT render the avatar itself — it embeds the PC's public stream
