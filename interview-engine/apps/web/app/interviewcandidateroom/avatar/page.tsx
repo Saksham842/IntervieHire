@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ function withPixelStreamingParams(rawUrl: string): string {
   }
 }
 
-export default function AvatarRoute() {
+function AvatarInner() {
   const params = useSearchParams();
   const [ready, setReady] = useState(false);
 
@@ -83,5 +83,13 @@ export default function AvatarRoute() {
         </button>
       )}
     </div>
+  );
+}
+
+export default function AvatarRoute() {
+  return (
+    <Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#05070d' }} />}>
+      <AvatarInner />
+    </Suspense>
   );
 }
