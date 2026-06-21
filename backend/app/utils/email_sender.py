@@ -6,19 +6,61 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-def send_html_email(to_email: str, subject: str, html_content: str) -> bool:
-    if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
-        logger.warning(f"SMTP credentials not configured. Email to {to_email} will run in SIMULATION mode.")
-        print(f"\n==================== [SIMULATION EMAIL] ====================\nTo: {to_email}\nSubject: {subject}\n============================================================\n")
-        return True
 
+def _mailgun_configured() -> bool:
+    return bool(getattr(settings, "MAILGUN_API_KEY", None) and getattr(settings, "MAILGUN_DOMAIN", None))
+
+
+def _send_mime_via_mailgun(to_email: str, msg) -> bool:
+    """Send a fully-built MIME message via Mailgun's HTTPS API (port 443 — works on
+    Railway/cloud where SMTP ports are blocked). The .mime endpoint forwards the raw
+    message as-is, so the text/calendar (iCal REQUEST) part is preserved."""
+    import requests
+    base = (getattr(settings, "MAILGUN_BASE_URL", None) or "https://api.mailgun.net").rstrip("/")
+    domain = settings.MAILGUN_DOMAIN
+    # Mailgun only accepts a sender on its verified domain. If the message's From is
+    # elsewhere (e.g. the gmail SMTP_FROM), rewrite it to noreply@<mailgun-domain> and
+    # keep the original address as Reply-To so candidate replies still reach the team.
+    cur_from = msg.get("From") or ""
+    if f"@{domain}" not in cur_from:
+        orig = settings.SMTP_FROM or "hr@interviehire.com"
+        if not msg.get("Reply-To") and "@" in orig:
+            msg["Reply-To"] = orig
+        del msg["From"]
+        msg["From"] = f"IntervieHire <noreply@{domain}>"
+    try:
+        resp = requests.post(
+            f"{base}/v3/{domain}/messages.mime",
+            auth=("api", settings.MAILGUN_API_KEY),
+            data={"to": to_email},
+            files={"message": ("message.mime", msg.as_string())},
+            timeout=25,
+        )
+        if 200 <= resp.status_code < 300:
+            logger.info(f"Email sent via Mailgun to {to_email}")
+            return True
+        logger.error(f"Mailgun send failed ({resp.status_code}) to {to_email}: {resp.text[:300]}")
+        return False
+    except Exception as e:
+        logger.error(f"Mailgun send error to {to_email}: {e}")
+        return False
+
+
+def send_html_email(to_email: str, subject: str, html_content: str) -> bool:
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From'] = settings.SMTP_FROM or "hr@interviehire.com"
     msg['To'] = to_email
+    msg.attach(MIMEText(html_content, 'html'))
 
-    part2 = MIMEText(html_content, 'html')
-    msg.attach(part2)
+    # Prefer Mailgun HTTP API (works in production); fall back to SMTP locally.
+    if _mailgun_configured():
+        return _send_mime_via_mailgun(to_email, msg)
+
+    if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
+        logger.warning(f"No email provider configured. Email to {to_email} will run in SIMULATION mode.")
+        print(f"\n==================== [SIMULATION EMAIL] ====================\nTo: {to_email}\nSubject: {subject}\n============================================================\n")
+        return True
 
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
@@ -353,7 +395,7 @@ def send_ical_invitation_email(
     ]
     ical_string = "\r\n".join(ical_lines)
 
-    if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
+    if not _mailgun_configured() and (not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD):
         box = f"""
 #################################################################
 # [SIMULATION iCAL CONFIRMATION]
@@ -392,6 +434,10 @@ def send_ical_invitation_email(
     part_cal.set_param('name', 'invite.ics')
     part_cal.add_header('Content-Class', 'urn:content-classes:calendarmessage')
     msg.attach(part_cal)
+
+    # Prefer Mailgun HTTP API (works in production); fall back to SMTP locally.
+    if _mailgun_configured():
+        return _send_mime_via_mailgun(candidate_email, msg)
 
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
