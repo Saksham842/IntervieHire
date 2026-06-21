@@ -101,12 +101,12 @@ app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 # CORS — allows Next.js frontend to talk to this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.FRONTEND_URL,
+    allow_origins=[o.strip() for o in str(settings.FRONTEND_URL).split(",") if o.strip()] + [
         "http://127.0.0.1:3000",
         "http://localhost:3000",
         "http://127.0.0.1:3001",
-        "http://localhost:3001"
+        "http://localhost:3001",
+        "http://localhost:3100",
     ],
     allow_credentials=True,
     allow_methods=["*"],
