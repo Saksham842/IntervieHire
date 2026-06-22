@@ -832,7 +832,7 @@ async function openCandidateReportPage(candidateId, initialTab = 'overview') {
     </div>
   `;
 
-  bindReportPage(candidate, job, analysis, root);
+  bindReportPage(candidate, job, analysis, root, initialTab);
 
   // Animate the score ring after paint
   requestAnimationFrame(() => {
@@ -872,7 +872,7 @@ function animateBarsIn(container) {
   });
 }
 
-function bindReportPage(candidate, job, analysis, root) {
+function bindReportPage(candidate, job, analysis, root, initialTab = 'overview') {
   root.querySelector('#rp-back')?.addEventListener('click', () => {
     resetWaveformAudio();
     navigateToJobDetail(job.id);
