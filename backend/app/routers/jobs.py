@@ -2029,8 +2029,8 @@ def get_applicant_resume_text(
 ):
     applicant = _verify_applicant_access(applicant_id, current_user, active_org_id, db)
     # Prefer the text extracted at upload time: it lives in the DB and survives the
-    # ephemeral filesystem (Render has no persistent disk, so uploads/ is wiped on
-    # every redeploy/restart). Only re-extract from the file if we never stored it.
+    # ephemeral filesystem (Railway has no persistent disk by default, so uploads/ is
+    # wiped on every redeploy/restart). Only re-extract from the file if we never stored it.
     if applicant.resume_text:
         return {"text": applicant.resume_text}
     if applicant.resume_url and os.path.exists(applicant.resume_url):
