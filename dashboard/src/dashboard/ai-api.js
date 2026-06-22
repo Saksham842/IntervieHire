@@ -142,14 +142,17 @@ function loadStateFromLocalStorage() {
 // model here in one line; the proxy allowlist (route.js) must include it.
 const MODEL_BY_TASK = {
   default: 'deepseek-v4-flash',
-  resumeDeep: 'deepseek-v4-pro', // one comprehensive resume scoring call — the stronger model
+  // Resume scoring uses flash, NOT pro: pro is a REASONING model whose thinking pass
+  // consumes the max_tokens budget, so the big analysis JSON came back truncated/empty
+  // and every call fell to the local keyword engine. Flash is non-reasoning + reliable.
+  resumeDeep: 'deepseek-v4-flash',
 };
-const SLOW_MODELS = new Set(['deepseek-v4-pro']); // pro tier may take longer
+const SLOW_MODELS = new Set(['deepseek-v4-pro']); // reasoning tier may take longer (currently unused)
 
 async function callDeepSeekAPI(messages, jsonMode = false, task = 'default', temperature) {
   const model = MODEL_BY_TASK[task] || MODEL_BY_TASK.default;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SLOW_MODELS.has(model) ? 90000 : 35000);
+  const timeoutId = setTimeout(() => controller.abort(), SLOW_MODELS.has(model) ? 90000 : 60000);
   // temperature is forwarded only when a caller passes one; otherwise the proxy
   // applies its default (0.7). Resume scoring passes a low value for stability.
   const reqBody = { messages, jsonMode, model };
@@ -188,7 +191,15 @@ async function callDeepSeekAPI(messages, jsonMode = false, task = 'default', tem
         throw new Error(`API response error (${response.status}): ${errText}`);
       }
       const data = await response.json();
-      return data.choices[0].message.content;
+      const content = data?.choices?.[0]?.message?.content;
+      // Empty/truncated content (e.g. JSON mode occasionally returns nothing) — retry
+      // before giving up, so a transient blank doesn't silently drop to the local engine.
+      if ((!content || !content.trim()) && attempt < MAX_RETRIES) {
+        await sleep(800 * 2 ** attempt + Math.random() * 250);
+        continue;
+      }
+      if (!content || !content.trim()) throw new Error('Empty AI response after retries');
+      return content;
     }
   } finally {
     clearTimeout(timeoutId);
