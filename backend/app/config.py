@@ -19,10 +19,11 @@ class Settings(BaseSettings):
     # CORS — the recruiter dashboard origin
     FRONTEND_URL: str = "http://localhost:3000"
 
-    # The candidate interview room base URL (the engine web app). The emailed
-    # calendar invite's "Enter Interview Room" link points here, so it opens the
-    # SAME AI interview room that "Run test interview" uses. Local: :3001.
-    # Production: https://interview.interviehire.com
+    # The candidate interview room BASE URL (the engine web app). The link is
+    # built as `{INTERVIEW_ROOM_URL}/interview?sessionId=…`, so this is the origin
+    # only. The emailed calendar invite's "Enter Interview Room" link points here,
+    # so it opens the SAME AI interview room that "Run test interview" uses.
+    # Local: :3001.  Production: https://interviehire.com  (→ .../interview)
     INTERVIEW_ROOM_URL: str = "http://localhost:3001"
 
     # SMTP Settings
@@ -53,6 +54,7 @@ class Settings(BaseSettings):
     XAI_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
     DEEPSEEK_API_KEY: str | None = None
+    RESEND_API_KEY: str | None = None
 
     class Config:
         env_file = ".env"

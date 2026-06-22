@@ -136,17 +136,38 @@ function loadStateFromLocalStorage() {
   }
 }
 
-async function callDeepSeekAPI(messages, jsonMode = false) {
+// Mixture-of-experts routing: each task maps to the model best suited to it.
+// This single map IS the routing "infra" — callers pass a task, nothing else
+// changes. v4-pro = stronger judgement, v4-flash = fast/light. Flip a task's
+// model here in one line; the proxy allowlist (route.js) must include it.
+const MODEL_BY_TASK = {
+  default: 'deepseek-v4-flash',
+  resumeExtract: 'deepseek-v4-flash',  // pull facts — fast + light
+  resumeScore: 'deepseek-v4-pro',      // the judgement — the stronger model
+  resumeCritique: 'deepseek-v4-flash', // narrative + sanity pass
+};
+const SLOW_MODELS = new Set(['deepseek-v4-pro']); // pro tier may take longer
+
+async function callDeepSeekAPI(messages, jsonMode = false, task = 'default') {
+  const model = MODEL_BY_TASK[task] || MODEL_BY_TASK.default;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 35000);
+  const timeoutId = setTimeout(() => controller.abort(), SLOW_MODELS.has(model) ? 90000 : 35000);
+  const body = JSON.stringify({ messages, jsonMode, model });
+  const send = () => fetch('/api/deepseek', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    signal: controller.signal,
+  });
 
   try {
-    const response = await fetch('/api/deepseek', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, jsonMode }),
-      signal: controller.signal
-    });
+    let response = await send();
+    // One retry on rate-limit: under bulk concurrency a 429 otherwise silently
+    // degrades this resume to the local keyword engine (worse score, no error).
+    if (response.status === 429) {
+      await new Promise(r => setTimeout(r, 1500));
+      response = await send();
+    }
 
     clearTimeout(timeoutId);
 

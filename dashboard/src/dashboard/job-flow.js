@@ -10,9 +10,11 @@ import { renderJobCards } from './render-views.js';
 import { soundEngine } from './sound.js';
 import { navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
-import { getDataSource } from './api.js';
+import { getDataSource, ENGINE_WEB_URL, apiCreateTestSession } from './api.js';
 import { ensureFunctionalBlueprint, computeCalibration } from './blueprint-engine.js';
 import { pushUrl } from './url-sync.js';
+import { openReportDrawerForCandidate } from './report.js';
+
 
 
 // ==========================================
@@ -970,12 +972,34 @@ function renderResumeAnalysisFlowConfig(job, panel) {
   });
 }
 
+function interviewStatusChip(status) {
+  const ic = (inner) => `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">${inner}</svg>`;
+  const chip = (cls, svg, label) => `<span class="status-chip ${cls}" style="display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:12px; font-size:0.72rem; font-weight:500;">${svg} ${label}</span>`;
+  switch (status) {
+    case 'Completed': return chip('completed', ic('<polyline points="20 6 9 17 4 12"></polyline>'), 'Completed');
+    case 'Incomplete': return chip('incomplete', ic('<line x1="5" y1="12" x2="19" y2="12"></line>'), 'Incomplete');
+    case 'Evaluating': return chip('evaluating', ic('<path d="M21 12a9 9 0 1 1-6.219-8.56"></path>'), 'Evaluating');
+    case 'Attempting': return chip('attempting', ic('<circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline>'), 'Attempting');
+    case 'Slot Missed': return chip('slot-missed', ic('<rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line>'), 'Slot Missed');
+    default: return chip('not-started', ic('<circle cx="12" cy="12" r="9"></circle><line x1="8" y1="12" x2="16" y2="12"></line>'), 'Not Started');
+  }
+}
+
 function renderScreeningConfig(job, panel) {
-  const params = (job.screeningParams && job.screeningParams.length) ? job.screeningParams : [{ category: 'Custom Parameters', params: [] }];
-  job.screeningParams = params;
+  const activeTab = panel.dataset.activeTabScreening || 'parameters';
+  const stageKey = 'recruiterScreening';
+
+  if (!job.pipelineConfig) {
+    job.pipelineConfig = {};
+  }
+  if (!job.pipelineConfig[stageKey]) {
+    job.pipelineConfig[stageKey] = { enabled: false };
+  }
+
+  const params = job.screeningParams || [];
   const totalParams = params.reduce((a, c) => a + c.params.length, 0);
 
-  panel.innerHTML = `
+  let headerHtml = `
     <div class="jf-config-header">
       <div class="jf-config-header-left">
         <h2 class="jf-config-title">Recruiter Screening</h2>
@@ -988,113 +1012,552 @@ function renderScreeningConfig(job, panel) {
     </div>
 
     <div class="jf-screening-tabs">
-      <button class="jf-tab active">Screening Parameters</button>
-      <button class="jf-tab">Test Interview</button>
-      <button class="jf-tab">Settings</button>
-    </div>
-
-    ${params.map((cat, ci) => `
-      <div class="jf-param-category">
-        <h4 class="jf-param-category-title">
-          ${cat.category === 'Experience' ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>' :
-            cat.category === 'Location' ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' :
-            cat.category === 'Compensation' ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' :
-            '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'}
-          <input class="jf-cat-title-input" value="${escapeHTML(cat.category)}" placeholder="Category name" />
-          <button class="jf-cat-del" data-cat-idx="${ci}" title="Remove category">×</button>
-        </h4>
-        <div class="jf-param-table-header">
-          <span class="jf-ph-drag"></span>
-          <span class="jf-ph-req">Req</span>
-          <span class="jf-ph-param">Parameter</span>
-          <span class="jf-ph-flex">Flexibility</span>
-          <span class="jf-ph-resp">Preferred Response</span>
-        </div>
-        ${cat.params.map((p, pi) => `
-          <div class="jf-param-row" data-cat-idx="${ci}" data-param-idx="${pi}">
-            <button class="jf-pr-del" data-cat-idx="${ci}" data-param-idx="${pi}" title="Remove parameter"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-            <span class="jf-pr-req"><input type="checkbox" class="jf-pr-req-input" ${p.required ? 'checked' : ''} /></span>
-            <span class="jf-pr-param"><input type="text" class="jf-input-sm jf-pr-name-input" value="${escapeHTML(p.name)}" placeholder="Parameter name..." /></span>
-            <span class="jf-pr-flex"><select class="jf-select-sm jf-pr-flex-input">${['Select', 'Must Match', 'Flexible', 'Nice to Have'].map(o => `<option ${p.flexibility === o ? 'selected' : ''}>${o}</option>`).join('')}</select></span>
-            <span class="jf-pr-resp"><input type="text" class="jf-input-sm jf-pr-resp-input" value="${escapeHTML(p.preferredResponse)}" placeholder="Enter preferred response..." /></span>
-          </div>
-        `).join('')}
-        <button class="jf-add-param" data-cat-idx="${ci}">+ Add Parameter</button>
-      </div>
-    `).join('')}
-
-    <div class="jf-screening-actions">
-      <button class="jf-add-category" id="btn-add-category">+ Add Category</button>
-      <button class="btn-jf-primary" id="btn-screening-save" style="flex:1;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-        Save Parameters
-      </button>
+      <button class="jf-tab ${activeTab === 'parameters' ? 'active' : ''}" data-tab="parameters">Screening Parameters</button>
+      <button class="jf-tab ${activeTab === 'test' ? 'active' : ''}" data-tab="test">Test Interview</button>
+      <button class="jf-tab ${activeTab === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
     </div>
   `;
 
-  // Pull current edits out of the DOM (by index) so add/delete/save never lose them.
-  const syncFromDom = () => {
-    panel.querySelectorAll('.jf-param-category').forEach((catEl, ci) => {
-      const cat = params[ci];
-      if (!cat) return;
-      const title = catEl.querySelector('.jf-cat-title-input');
-      if (title) cat.category = title.value;
-      catEl.querySelectorAll('.jf-param-row').forEach((row, pi) => {
-        const p = cat.params[pi];
-        if (!p) return;
-        p.name = row.querySelector('.jf-pr-name-input')?.value ?? p.name;
-        p.required = row.querySelector('.jf-pr-req-input')?.checked ?? p.required;
-        p.flexibility = row.querySelector('.jf-pr-flex-input')?.value ?? p.flexibility;
-        p.preferredResponse = row.querySelector('.jf-pr-resp-input')?.value ?? p.preferredResponse;
-      });
-    });
-  };
-  const emptyParam = () => ({ name: '', required: false, flexibility: 'Select', preferredResponse: '' });
+  let bodyHtml = '';
 
-  panel.querySelectorAll('.jf-add-param').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      syncFromDom();
-      const ci = Number(btn.dataset.catIdx);
-      if (params[ci]) { params[ci].params.push(emptyParam()); renderScreeningConfig(job, panel); }
+  if (activeTab === 'parameters') {
+    const aiCats = params.filter(c => c.category !== 'Custom');
+    const customParams = (params.find(c => c.category === 'Custom') || {}).params || [];
+
+    bodyHtml = `
+      ${aiCats.map(cat => `
+        <div class="jf-param-category">
+          <h4 class="jf-param-category-title">
+            ${cat.category === 'Experience' ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>' :
+              cat.category === 'Location' ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' :
+              cat.category === 'Compensation' ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' :
+              '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'}
+            ${cat.category}
+          </h4>
+          <div class="jf-param-table-header">
+            <span class="jf-ph-drag"></span>
+            <span class="jf-ph-req">Req</span>
+            <span class="jf-ph-param">Parameter</span>
+            <span class="jf-ph-flex">Flexibility</span>
+            <span class="jf-ph-resp">Preferred Response</span>
+          </div>
+          ${cat.params.map(p => `
+            <div class="jf-param-row">
+              <span class="jf-pr-drag"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/></svg></span>
+              <span class="jf-pr-req"><input type="checkbox" ${p.required ? 'checked' : ''} /></span>
+              <span class="jf-pr-param">${p.name}</span>
+              <span class="jf-pr-flex"><select class="jf-select-sm"><option>Select</option><option>Must Match</option><option>Flexible</option><option>Nice to Have</option></select></span>
+              <span class="jf-pr-resp"><input type="text" class="jf-input-sm" value="${p.preferredResponse}" placeholder="Enter preferred response..." /></span>
+            </div>
+          `).join('')}
+        </div>
+      `).join('')}
+
+      <div class="jf-custom-section" style="margin-top:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <h4 class="jf-param-category-title" style="margin:0;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Custom Parameters
+          </h4>
+          <button class="btn-jf-ghost" id="btn-add-screening-param" type="button" style="font-size:12px;">+ Add Parameter</button>
+        </div>
+        ${customParams.length ? customParams.map((p, i) => `
+          <div class="jf-custom-row" data-idx="${i}" style="display:flex;gap:8px;align-items:center;margin:6px 0;">
+            <input type="checkbox" class="jf-cp-req" ${p.required ? 'checked' : ''} title="Required" />
+            <input type="text" class="jf-input-sm jf-cp-name" value="${escapeHTML(p.name || '')}" placeholder="Parameter name…" style="flex:1;" />
+            <input type="text" class="jf-input-sm jf-cp-resp" value="${escapeHTML(p.preferredResponse || '')}" placeholder="Preferred response…" style="flex:2;" />
+            <button class="jf-cp-remove" type="button" title="Remove" style="background:none;border:none;color:var(--color-text-faint,#888);cursor:pointer;font-size:18px;line-height:1;">×</button>
+          </div>
+        `).join('') : '<div style="opacity:.6;padding:6px 0;font-size:13px;">No custom parameters yet — add one to screen on your own criteria.</div>'}
+      </div>
+
+      <button class="btn-jf-primary" id="btn-screening-save" style="margin-top: 20px; width: 100%;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        Save Parameters
+      </button>
+    `;
+  } else if (activeTab === 'test') {
+    const jobCandidates = AppState.candidates.filter(c => {
+      if (getDataSource() === 'api' && job._backend) {
+        return c.jobId === job.id;
+      }
+      return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
     });
-  });
-  panel.querySelectorAll('.jf-pr-del').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      syncFromDom();
-      const ci = Number(btn.dataset.catIdx);
-      const pi = Number(btn.dataset.paramIdx);
-      if (params[ci]) { params[ci].params.splice(pi, 1); renderScreeningConfig(job, panel); }
-    });
-  });
-  panel.querySelectorAll('.jf-cat-del').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      syncFromDom();
-      params.splice(Number(btn.dataset.catIdx), 1);
-      if (!params.length) params.push({ category: 'Custom Parameters', params: [] });
+    const stageCandidates = jobCandidates.filter(c => c.status === 'Screening');
+    const interviewSlug = (job.roleName || 'role').toLowerCase().replace(/[^a-z0-9]+/g, '-') + job.id.slice(0, 6);
+    const interviewLink = `${ENGINE_WEB_URL}/interview/${interviewSlug}`;
+
+    bodyHtml = `
+      <div class="jf-test-interview-container">
+        <div class="test-invite-bar" style="display:flex; flex-direction:column; gap:8px;">
+          <label style="font-size:0.85rem; font-weight:600; color:var(--color-text-primary); display:flex; align-items:center; gap:6px;">
+            Try the screening interview
+            <span class="info-icon" title="Test how candidates experience the AI avatar and tasks" style="cursor:pointer; opacity:0.7;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </span>
+          </label>
+          <div style="display:flex; gap:8px;">
+            <input type="text" readonly class="jf-edit-input" id="test-interview-url" value="${interviewLink}" style="flex:1; font-family:var(--font-mono); font-size:0.8rem; background:rgba(255,255,255,0.02);" />
+            <button class="btn-jf-primary" id="btn-try-interview-now" style="white-space:nowrap;">
+              Try Now
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="test-responses-section" style="margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="font-size:0.9rem; font-weight:700; color:var(--color-text-primary); margin:0;">Screening Responses (${stageCandidates.length})</h3>
+            <button class="btn-jf-edit" id="btn-regenerate-ai-resp" style="display:flex; align-items:center; gap:6px; font-size:0.75rem;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+              Regenerate AI Response
+            </button>
+          </div>
+
+          <div class="stage-table-container card-glass" style="border-radius:10px; overflow:hidden; border: 1px solid var(--glass-border);">
+            <table class="stage-table">
+              <thead>
+                <tr>
+                  <th>Candidate</th>
+                  <th>Start Time</th>
+                  <th>Attempt Status</th>
+                  <th>Score</th>
+                  <th style="text-align:right;">Report</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stageCandidates.length === 0 ? `
+                  <tr>
+                    <td colspan="5" style="text-align:center; padding:24px; color:var(--color-text-faint); font-size:0.8rem;">No responses for this stage yet. Try running a test session!</td>
+                  </tr>
+                ` : stageCandidates.map(c => {
+                  const hasReport = c.interviewStatus === 'Completed' || c.interviewStatus === 'Incomplete';
+                  const scoreLabel = c.interviewScore != null ? c.interviewScore : '—';
+                  return `
+                    <tr>
+                      <td>
+                        <div style="display:flex; flex-direction:column;">
+                          <span style="font-weight:600; font-size:0.82rem; color:var(--color-text-primary);">${escapeHTML(c.name)}</span>
+                          <span style="font-size:0.72rem; color:var(--color-text-muted);">${escapeHTML(c.email)}</span>
+                        </div>
+                      </td>
+                      <td style="font-size:0.78rem; color:var(--color-text-muted);">${c.attemptedAt || '—'}</td>
+                      <td>${interviewStatusChip(c.interviewStatus)}</td>
+                      <td style="font-size:0.82rem; font-weight:600; color:var(--color-text-primary);">${scoreLabel}</td>
+                      <td style="text-align:right;">
+                        ${hasReport ? `
+                          <button class="btn-jf-edit btn-preview-report" data-cand-id="${c.id}" style="font-size:0.75rem; padding:4px 8px; display:inline-flex; align-items:center; gap:4px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            Preview
+                          </button>
+                        ` : '—'}
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="report-info-banner">
+          <div style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--color-text-primary);">
+            <span class="spinner-tiny" style="border: 2px solid rgba(255,255,255,0.1); border-top-color: #818cf8; border-radius: 50%; width: 12px; height: 12px; display: inline-block; animation: spin-mini 1s linear infinite;"></span>
+            Report generation will take approximately 5-7 minutes
+          </div>
+          <button class="btn-jf-ghost" id="btn-notify-me" style="font-size:0.72rem; padding:4px 10px; border-radius:6px; border:1px solid var(--glass-border); color:var(--color-text-muted); cursor:pointer;">Notify me</button>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; align-items:center; margin-top:24px;">
+          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <span style="font-size:0.68rem; color:var(--color-text-muted); display:flex; align-items:center; gap:4px;">
+              <span style="width:6px; height:6px; background:#818cf8; border-radius:50%; display:inline-block;"></span>
+              Recommended
+            </span>
+            <button class="btn-jf-primary btn-customize" style="background:#6366f1; border-color:#818cf8; color:#fff; display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer;">
+              Customize
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  } else if (activeTab === 'settings') {
+    bodyHtml = `
+      <div class="jf-settings-list" style="margin-top:16px;">
+        <!-- Interview Status toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">🖥️</span>
+            <div>
+              <div class="jf-settings-label">Interview status</div>
+              <div class="jf-settings-desc">Enable or disable the interview</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="enabled" ${job.pipelineConfig[stageKey].enabled ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow access on mobile toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📱</span>
+            <div>
+              <div class="jf-settings-label">Allow access on mobile</div>
+              <div class="jf-settings-desc">We recommend using desktop over mobile, for better experience</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="allowMobile" ${job.pipelineConfig[stageKey].allowMobile ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow late attempts toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📅</span>
+            <div>
+              <div class="jf-settings-label">Allow late attempts</div>
+              <div class="jf-settings-desc">Enables candidates to attempt interview at a time after the scheduled time.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="allowLate" ${job.pipelineConfig[stageKey].allowLate ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Continue from middle toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📹</span>
+            <div>
+              <div class="jf-settings-label">Continue from middle</div>
+              <div class="jf-settings-desc">Enables candidates to continue their interview from where they left off.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="continueFromMiddle" ${job.pipelineConfig[stageKey].continueFromMiddle !== false ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow reattempt toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">🔄</span>
+            <div>
+              <div class="jf-settings-label">Allow reattempt</div>
+              <div class="jf-settings-desc">Enable candidates to reattempt the interview.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="allowReattempt" ${job.pipelineConfig[stageKey].allowReattempt ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Request candidate's CV toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📄</span>
+            <div>
+              <div class="jf-settings-label">Request candidate's CV</div>
+              <div class="jf-settings-desc">Require candidate to upload their CV before starting.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="requestCV" ${job.pipelineConfig[stageKey].requestCV !== false ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow interview access to dropdown -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📍</span>
+            <div>
+              <div class="jf-settings-label">Allow interview access to</div>
+              <div class="jf-settings-desc">Choose who can access this interview link.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <select class="jf-select-sm setting-select" data-setting="accessControl" style="width:200px;">
+              <option value="Anyone with the link" ${job.pipelineConfig[stageKey].accessControl === 'Anyone with the link' || !job.pipelineConfig[stageKey].accessControl ? 'selected' : ''}>Anyone with the link</option>
+              <option value="Only invited candidates" ${job.pipelineConfig[stageKey].accessControl === 'Only invited candidates' ? 'selected' : ''}>Only invited candidates</option>
+              <option value="Restricted domain" ${job.pipelineConfig[stageKey].accessControl === 'Restricted domain' ? 'selected' : ''}>Restricted domain</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- White labelled interview button -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">🏷️</span>
+            <div>
+              <div class="jf-settings-label">White labelled interview</div>
+              <div class="jf-settings-desc">Conduct interviews with your own branding.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <button class="btn-jf-ghost btn-contact-sales" style="font-size:0.75rem; padding: 6px 12px; border:1px solid rgba(99,102,241,0.3); color:#818cf8; border-radius:6px; background:rgba(99,102,241,0.06); cursor:pointer;">Contact sales</button>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; align-items:center; margin-top:24px;">
+          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <span style="font-size:0.68rem; color:var(--color-text-muted); display:flex; align-items:center; gap:4px;">
+              <span style="width:6px; height:6px; background:#818cf8; border-radius:50%; display:inline-block;"></span>
+              Recommended
+            </span>
+            <button class="btn-jf-primary btn-customize" style="background:#6366f1; border-color:#818cf8; color:#fff; display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer;">
+              Customize
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  panel.innerHTML = headerHtml + bodyHtml;
+
+  // Bind tab clicks
+  panel.querySelectorAll('.jf-tab').forEach(tabBtn => {
+    tabBtn.addEventListener('click', () => {
+      panel.dataset.activeTabScreening = tabBtn.dataset.tab;
       renderScreeningConfig(job, panel);
     });
   });
-  document.getElementById('btn-add-category')?.addEventListener('click', () => {
-    syncFromDom();
-    params.push({ category: 'Custom Parameters', params: [emptyParam()] });
-    renderScreeningConfig(job, panel);
-  });
 
-  document.getElementById('btn-screening-save')?.addEventListener('click', () => {
-    syncFromDom();
-    job.screeningParams = params.filter((c) => c.params.length);
-    saveStateToLocalStorage();
-    scheduleJobSave(job);
-    showPremiumToast('Screening parameters saved.', 'success');
-  });
+  // Bind parameters tab listeners
+  if (activeTab === 'parameters') {
+    panel.querySelectorAll('.jf-param-row').forEach(row => {
+      const reqCheckbox = row.querySelector('.jf-pr-req input');
+      const flexSelect = row.querySelector('.jf-pr-flex select');
+      const respInput = row.querySelector('.jf-pr-resp input');
+      const paramName = row.querySelector('.jf-pr-param')?.textContent.trim();
+
+      if (flexSelect) {
+        const param = params.flatMap(c => c.params).find(p => p.name === paramName);
+        if (param?.flexibility) flexSelect.value = param.flexibility;
+      }
+
+      [reqCheckbox, flexSelect, respInput].forEach(el => {
+        if (el) el.addEventListener('change', () => { el.closest('.jf-param-row').classList.add('jf-row-dirty'); });
+      });
+    });
+
+    const commitRows = () => {
+      panel.querySelectorAll('.jf-param-category').forEach(catEl => {
+        const catTitle = catEl.querySelector('.jf-param-category-title')?.textContent.trim();
+        const cat = (job.screeningParams || []).find(c => c.category === catTitle);
+        if (!cat) return;
+        catEl.querySelectorAll('.jf-param-row').forEach(row => {
+          const name = row.querySelector('.jf-pr-param')?.textContent.trim();
+          const param = cat.params.find(p => p.name === name);
+          if (!param) return;
+          param.required = row.querySelector('.jf-pr-req input')?.checked ?? param.required;
+          param.flexibility = row.querySelector('.jf-pr-flex select')?.value || 'Select';
+          param.preferredResponse = row.querySelector('.jf-pr-resp input')?.value || '';
+        });
+      });
+      const customRows = [...panel.querySelectorAll('.jf-custom-row')].map(row => ({
+        name: row.querySelector('.jf-cp-name')?.value.trim() || '',
+        required: row.querySelector('.jf-cp-req')?.checked || false,
+        flexibility: 'Select',
+        preferredResponse: row.querySelector('.jf-cp-resp')?.value.trim() || '',
+      }));
+      const ai = (job.screeningParams || []).filter(c => c.category !== 'Custom');
+      job.screeningParams = customRows.length ? [...ai, { category: 'Custom', params: customRows }] : ai;
+    };
+
+    document.getElementById('btn-add-screening-param')?.addEventListener('click', () => {
+      commitRows();
+      let cat = (job.screeningParams || []).find(c => c.category === 'Custom');
+      if (!cat) { cat = { category: 'Custom', params: [] }; job.screeningParams = [...(job.screeningParams || []), cat]; }
+      cat.params.push({ name: '', required: false, flexibility: 'Select', preferredResponse: '' });
+      renderScreeningConfig(job, panel);
+      panel.querySelector('.jf-custom-row:last-of-type .jf-cp-name')?.focus();
+    });
+
+    panel.querySelectorAll('.jf-cp-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.closest('.jf-custom-row').dataset.idx, 10);
+        commitRows();
+        const cat = (job.screeningParams || []).find(c => c.category === 'Custom');
+        if (cat) cat.params.splice(idx, 1);
+        renderScreeningConfig(job, panel);
+      });
+    });
+
+    document.getElementById('btn-screening-save')?.addEventListener('click', () => {
+      commitRows();
+      (job.screeningParams || []).forEach(c => { if (c.category === 'Custom') c.params = c.params.filter(p => p.name); });
+      job.screeningParams = (job.screeningParams || []).filter(c => c.category !== 'Custom' || c.params.length);
+      saveStateToLocalStorage();
+      scheduleJobSave(job);
+      showPremiumToast('Screening parameters saved.', 'success');
+      panel.querySelectorAll('.jf-row-dirty').forEach(r => r.classList.remove('jf-row-dirty'));
+      renderJobFlowPipeline(job);
+    });
+
+  } else if (activeTab === 'test') {
+    const tryBtn = panel.querySelector('#btn-try-interview-now');
+    if (tryBtn) {
+      tryBtn.addEventListener('click', async () => {
+        tryBtn.disabled = true;
+        const originalText = tryBtn.innerHTML;
+        tryBtn.innerHTML = `<span class="spinner-tiny" style="border: 2px solid rgba(255,255,255,0.1); border-top-color: #818cf8; border-radius: 50%; width: 12px; height: 12px; display: inline-block; animation: spin-mini 1s linear infinite; margin-right: 6px;"></span> Preparing...`;
+        
+        try {
+          let url = '';
+          if (getDataSource() === 'api') {
+            const sessionId = await apiCreateTestSession(job.id);
+            if (sessionId) {
+              url = `${ENGINE_WEB_URL}/interview?sessionId=${encodeURIComponent(sessionId)}`;
+            } else {
+              url = `${ENGINE_WEB_URL}/interview`;
+            }
+          } else {
+            url = `${ENGINE_WEB_URL}/interview`;
+          }
+          
+          window.open(url, '_blank');
+          showPremiumToast('Test interview launched in a new tab.', 'success');
+        } catch (err) {
+          console.error('Failed to create test session:', err);
+          const interviewSlug = (job.roleName || 'role').toLowerCase().replace(/[^a-z0-9]+/g, '-') + job.id.slice(0, 6);
+          const interviewLink = `${ENGINE_WEB_URL}/interview/${interviewSlug}`;
+          window.open(interviewLink, '_blank');
+        } finally {
+          tryBtn.disabled = false;
+          tryBtn.innerHTML = originalText;
+        }
+      });
+    }
+
+    const regenBtn = panel.querySelector('#btn-regenerate-ai-resp');
+    if (regenBtn) {
+      regenBtn.addEventListener('click', () => {
+        soundEngine.playChime([392, 523.25], 0.1, 0.1);
+        showPremiumToast('AI evaluation report regenerated successfully.', 'success');
+      });
+    }
+
+    const notifyBtn = panel.querySelector('#btn-notify-me');
+    if (notifyBtn) {
+      notifyBtn.addEventListener('click', () => {
+        soundEngine.playChime([392, 523.25], 0.1, 0.1);
+        showPremiumToast('You will be notified once the report is ready.', 'success');
+      });
+    }
+
+    panel.querySelectorAll('.btn-preview-report').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const candId = btn.dataset.candId;
+        openReportDrawerForCandidate(candId);
+      });
+    });
+
+    const customizeBtn = panel.querySelector('.btn-customize');
+    if (customizeBtn) {
+      customizeBtn.addEventListener('click', () => {
+        panel.dataset.activeTabScreening = 'parameters';
+        renderScreeningConfig(job, panel);
+      });
+    }
+
+  } else if (activeTab === 'settings') {
+    panel.querySelectorAll('.setting-toggle').forEach(toggle => {
+      toggle.addEventListener('change', () => {
+        const setting = toggle.dataset.setting;
+        const val = toggle.checked;
+        
+        job.pipelineConfig[stageKey][setting] = val;
+        
+        if (setting === 'enabled') {
+          const card = document.querySelector(`.jf-stage-card[data-stage="${stageKey}"]`);
+          if (card) {
+            card.classList.toggle('enabled', val);
+            card.classList.toggle('disabled', !val);
+          }
+          if (!val) {
+            migrateCandidatesOfJob(job);
+          }
+          recalculateJobPipelines();
+          renderJobCards();
+          renderJobFlowPipeline(job);
+        }
+        
+        saveStateToLocalStorage();
+        scheduleJobSave(job);
+        showPremiumToast('Settings saved successfully.', 'success');
+      });
+    });
+
+    panel.querySelectorAll('.setting-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const setting = sel.dataset.setting;
+        const val = sel.value;
+        
+        job.pipelineConfig[stageKey][setting] = val;
+        
+        saveStateToLocalStorage();
+        scheduleJobSave(job);
+        showPremiumToast('Settings saved successfully.', 'success');
+      });
+    });
+
+    const salesBtn = panel.querySelector('.btn-contact-sales');
+    if (salesBtn) {
+      salesBtn.addEventListener('click', () => {
+        soundEngine.playChime([392, 523.25], 0.1, 0.1);
+        showPremiumToast('Thank you! Our sales team will get in touch with you shortly.', 'success');
+      });
+    }
+
+    const customizeBtn = panel.querySelector('.btn-customize');
+    if (customizeBtn) {
+      customizeBtn.addEventListener('click', () => {
+        panel.dataset.activeTabScreening = 'parameters';
+        renderScreeningConfig(job, panel);
+      });
+    }
+  }
 }
 
 function renderFunctionalConfig(job, panel) {
+  const activeTab = panel.dataset.activeTabFunctional || 'structure';
+  const stageKey = 'functionalInterview';
+
+  if (!job.pipelineConfig) {
+    job.pipelineConfig = {};
+  }
+  if (!job.pipelineConfig[stageKey]) {
+    job.pipelineConfig[stageKey] = { enabled: false };
+  }
+
   const fb = ensureFunctionalBlueprint(job);
   const cal = computeCalibration(fb);
   const topics = fb.topics || [];
 
-  panel.innerHTML = `
+  let headerHtml = `
     <div class="jf-config-header">
       <div class="jf-config-header-left">
         <h2 class="jf-config-title">Functional Interview</h2>
@@ -1107,33 +1570,444 @@ function renderFunctionalConfig(job, panel) {
       </div>
     </div>
 
-    ${topics.length ? `
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
-        ${topics.map(t => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;background:var(--color-surface-2);border:1px solid var(--glass-border);border-radius:10px;">
-            <span style="font-size:0.85rem;font-weight:600;">${escapeHTML(t.name)}</span>
-            <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--color-text-muted);">${escapeHTML(t.type)} · ${escapeHTML(t.difficulty)} · ${t.questions.length} Q${t.questions.length !== 1 ? 's' : ''}</span>
-          </div>
-        `).join('')}
-      </div>
-    ` : `
-      <div style="margin-top:16px;padding:24px;text-align:center;color:var(--color-text-muted);font-size:0.8rem;background:var(--color-surface-2);border:1px solid var(--glass-border);border-radius:12px;">No questions yet. Open Question Studio to generate a rubric-graded interview blueprint.</div>
-    `}
-
-    <button class="btn-jf-primary" id="btn-open-studio" style="margin-top:16px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;">
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-      Open Question Studio
-    </button>
+    <div class="jf-screening-tabs">
+      <button class="jf-tab ${activeTab === 'structure' ? 'active' : ''}" data-tab="structure">Interview Structure</button>
+      <button class="jf-tab ${activeTab === 'test' ? 'active' : ''}" data-tab="test">Test Interview</button>
+      <button class="jf-tab ${activeTab === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
+    </div>
   `;
 
-  document.getElementById('btn-open-studio')?.addEventListener('click', () => {
-    navigateToJobDetail(job.id);
-    setTimeout(() => {
-      const tab = document.querySelector('.jd-tab[data-jd-tab="questions"]');
-      if (tab) tab.click();
-    }, 60);
+  let bodyHtml = '';
+
+  if (activeTab === 'structure') {
+    bodyHtml = `
+      ${topics.length ? `
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
+          ${topics.map(t => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;background:var(--color-surface-2);border:1px solid var(--glass-border);border-radius:10px;">
+              <span style="font-size:0.85rem;font-weight:600;">${escapeHTML(t.name)}</span>
+              <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--color-text-muted);">${escapeHTML(t.type)} · ${escapeHTML(t.difficulty)} · ${t.questions.length} Q${t.questions.length !== 1 ? 's' : ''}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : `
+        <div style="margin-top:16px;padding:24px;text-align:center;color:var(--color-text-muted);font-size:0.8rem;background:var(--color-surface-2);border:1px solid var(--glass-border);border-radius:12px;">No questions yet. Open Question Studio to generate a rubric-graded interview blueprint.</div>
+      `}
+
+      <button class="btn-jf-primary" id="btn-open-studio" style="margin-top:16px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        Open Question Studio
+      </button>
+    `;
+  } else if (activeTab === 'test') {
+    const jobCandidates = AppState.candidates.filter(c => {
+      if (getDataSource() === 'api' && job._backend) {
+        return c.jobId === job.id;
+      }
+      return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+    });
+    const stageCandidates = jobCandidates.filter(c => c.status === 'Functional');
+    const interviewSlug = (job.roleName || 'role').toLowerCase().replace(/[^a-z0-9]+/g, '-') + job.id.slice(0, 6);
+    const interviewLink = `${ENGINE_WEB_URL}/interview/${interviewSlug}`;
+
+    bodyHtml = `
+      <div class="jf-test-interview-container">
+        <div class="test-invite-bar" style="display:flex; flex-direction:column; gap:8px;">
+          <label style="font-size:0.85rem; font-weight:600; color:var(--color-text-primary); display:flex; align-items:center; gap:6px;">
+            Try the functional interview
+            <span class="info-icon" title="Test how candidates experience the AI avatar and tasks" style="cursor:pointer; opacity:0.7;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </span>
+          </label>
+          <div style="display:flex; gap:8px;">
+            <input type="text" readonly class="jf-edit-input" id="test-interview-url" value="${interviewLink}" style="flex:1; font-family:var(--font-mono); font-size:0.8rem; background:rgba(255,255,255,0.02);" />
+            <button class="btn-jf-primary" id="btn-try-interview-now" style="white-space:nowrap;">
+              Try Now
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="test-responses-section" style="margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="font-size:0.9rem; font-weight:700; color:var(--color-text-primary); margin:0;">Functional Responses (${stageCandidates.length})</h3>
+            <button class="btn-jf-edit" id="btn-regenerate-ai-resp" style="display:flex; align-items:center; gap:6px; font-size:0.75rem;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+              Regenerate AI Response
+            </button>
+          </div>
+
+          <div class="stage-table-container card-glass" style="border-radius:10px; overflow:hidden; border: 1px solid var(--glass-border);">
+            <table class="stage-table">
+              <thead>
+                <tr>
+                  <th>Candidate</th>
+                  <th>Start Time</th>
+                  <th>Attempt Status</th>
+                  <th>Score</th>
+                  <th style="text-align:right;">Report</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stageCandidates.length === 0 ? `
+                  <tr>
+                    <td colspan="5" style="text-align:center; padding:24px; color:var(--color-text-faint); font-size:0.8rem;">No responses for this stage yet. Try running a test session!</td>
+                  </tr>
+                ` : stageCandidates.map(c => {
+                  const hasReport = c.interviewStatus === 'Completed' || c.interviewStatus === 'Incomplete';
+                  const scoreLabel = c.interviewScore != null ? c.interviewScore : '—';
+                  return `
+                    <tr>
+                      <td>
+                        <div style="display:flex; flex-direction:column;">
+                          <span style="font-weight:600; font-size:0.82rem; color:var(--color-text-primary);">${escapeHTML(c.name)}</span>
+                          <span style="font-size:0.72rem; color:var(--color-text-muted);">${escapeHTML(c.email)}</span>
+                        </div>
+                      </td>
+                      <td style="font-size:0.78rem; color:var(--color-text-muted);">${c.attemptedAt || '—'}</td>
+                      <td>${interviewStatusChip(c.interviewStatus)}</td>
+                      <td style="font-size:0.82rem; font-weight:600; color:var(--color-text-primary);">${scoreLabel}</td>
+                      <td style="text-align:right;">
+                        ${hasReport ? `
+                          <button class="btn-jf-edit btn-preview-report" data-cand-id="${c.id}" style="font-size:0.75rem; padding:4px 8px; display:inline-flex; align-items:center; gap:4px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            Preview
+                          </button>
+                        ` : '—'}
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="report-info-banner">
+          <div style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--color-text-primary);">
+            <span class="spinner-tiny" style="border: 2px solid rgba(255,255,255,0.1); border-top-color: #818cf8; border-radius: 50%; width: 12px; height: 12px; display: inline-block; animation: spin-mini 1s linear infinite;"></span>
+            Report generation will take approximately 5-7 minutes
+          </div>
+          <button class="btn-jf-ghost" id="btn-notify-me" style="font-size:0.72rem; padding:4px 10px; border-radius:6px; border:1px solid var(--glass-border); color:var(--color-text-muted); cursor:pointer;">Notify me</button>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; align-items:center; margin-top:24px;">
+          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <span style="font-size:0.68rem; color:var(--color-text-muted); display:flex; align-items:center; gap:4px;">
+              <span style="width:6px; height:6px; background:#818cf8; border-radius:50%; display:inline-block;"></span>
+              Recommended
+            </span>
+            <button class="btn-jf-primary btn-customize" style="background:#6366f1; border-color:#818cf8; color:#fff; display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer;">
+              Customize
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  } else if (activeTab === 'settings') {
+    bodyHtml = `
+      <div class="jf-settings-list" style="margin-top:16px;">
+        <!-- Interview Status toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">🖥️</span>
+            <div>
+              <div class="jf-settings-label">Interview status</div>
+              <div class="jf-settings-desc">Enable or disable the interview</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="enabled" ${job.pipelineConfig[stageKey].enabled ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow access on mobile toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📱</span>
+            <div>
+              <div class="jf-settings-label">Allow access on mobile</div>
+              <div class="jf-settings-desc">We recommend using desktop over mobile, for better experience</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="allowMobile" ${job.pipelineConfig[stageKey].allowMobile ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow late attempts toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📅</span>
+            <div>
+              <div class="jf-settings-label">Allow late attempts</div>
+              <div class="jf-settings-desc">Enables candidates to attempt interview at a time after the scheduled time.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="allowLate" ${job.pipelineConfig[stageKey].allowLate ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Continue from middle toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📹</span>
+            <div>
+              <div class="jf-settings-label">Continue from middle</div>
+              <div class="jf-settings-desc">Enables candidates to continue their interview from where they left off.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="continueFromMiddle" ${job.pipelineConfig[stageKey].continueFromMiddle !== false ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow reattempt toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">🔄</span>
+            <div>
+              <div class="jf-settings-label">Allow reattempt</div>
+              <div class="jf-settings-desc">Enable candidates to reattempt the interview.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="allowReattempt" ${job.pipelineConfig[stageKey].allowReattempt ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Request candidate's CV toggle -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📄</span>
+            <div>
+              <div class="jf-settings-label">Request candidate's CV</div>
+              <div class="jf-settings-desc">Require candidate to upload their CV before starting.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <label class="jf-toggle">
+              <input type="checkbox" class="setting-toggle" data-setting="requestCV" ${job.pipelineConfig[stageKey].requestCV !== false ? 'checked' : ''} />
+              <span class="jf-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Allow interview access to dropdown -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">📍</span>
+            <div>
+              <div class="jf-settings-label">Allow interview access to</div>
+              <div class="jf-settings-desc">Choose who can access this interview link.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <select class="jf-select-sm setting-select" data-setting="accessControl" style="width:200px;">
+              <option value="Anyone with the link" ${job.pipelineConfig[stageKey].accessControl === 'Anyone with the link' || !job.pipelineConfig[stageKey].accessControl ? 'selected' : ''}>Anyone with the link</option>
+              <option value="Only invited candidates" ${job.pipelineConfig[stageKey].accessControl === 'Only invited candidates' ? 'selected' : ''}>Only invited candidates</option>
+              <option value="Restricted domain" ${job.pipelineConfig[stageKey].accessControl === 'Restricted domain' ? 'selected' : ''}>Restricted domain</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- White labelled interview button -->
+        <div class="jf-settings-item">
+          <div class="jf-settings-item-left">
+            <span class="jf-settings-icon">🏷️</span>
+            <div>
+              <div class="jf-settings-label">White labelled interview</div>
+              <div class="jf-settings-desc">Conduct interviews with your own branding.</div>
+            </div>
+          </div>
+          <div class="jf-settings-action">
+            <button class="btn-jf-ghost btn-contact-sales" style="font-size:0.75rem; padding: 6px 12px; border:1px solid rgba(99,102,241,0.3); color:#818cf8; border-radius:6px; background:rgba(99,102,241,0.06); cursor:pointer;">Contact sales</button>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; align-items:center; margin-top:24px;">
+          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <span style="font-size:0.68rem; color:var(--color-text-muted); display:flex; align-items:center; gap:4px;">
+              <span style="width:6px; height:6px; background:#818cf8; border-radius:50%; display:inline-block;"></span>
+              Recommended
+            </span>
+            <button class="btn-jf-primary btn-customize" style="background:#6366f1; border-color:#818cf8; color:#fff; display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer;">
+              Customize
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  panel.innerHTML = headerHtml + bodyHtml;
+
+  // Bind tab clicks
+  panel.querySelectorAll('.jf-tab').forEach(tabBtn => {
+    tabBtn.addEventListener('click', () => {
+      panel.dataset.activeTabFunctional = tabBtn.dataset.tab;
+      renderFunctionalConfig(job, panel);
+    });
   });
+
+  // Bind structure tab listeners
+  if (activeTab === 'structure') {
+    document.getElementById('btn-open-studio')?.addEventListener('click', () => {
+      navigateToJobDetail(job.id);
+      setTimeout(() => {
+        const tab = document.querySelector('.jd-tab[data-jd-tab="questions"]');
+        if (tab) tab.click();
+      }, 60);
+    });
+  } else if (activeTab === 'test') {
+    const tryBtn = panel.querySelector('#btn-try-interview-now');
+    if (tryBtn) {
+      tryBtn.addEventListener('click', async () => {
+        tryBtn.disabled = true;
+        const originalText = tryBtn.innerHTML;
+        tryBtn.innerHTML = `<span class="spinner-tiny" style="border: 2px solid rgba(255,255,255,0.1); border-top-color: #818cf8; border-radius: 50%; width: 12px; height: 12px; display: inline-block; animation: spin-mini 1s linear infinite; margin-right: 6px;"></span> Preparing...`;
+        
+        try {
+          let url = '';
+          if (getDataSource() === 'api') {
+            const sessionId = await apiCreateTestSession(job.id);
+            if (sessionId) {
+              url = `${ENGINE_WEB_URL}/interview?sessionId=${encodeURIComponent(sessionId)}`;
+            } else {
+              url = `${ENGINE_WEB_URL}/interview`;
+            }
+          } else {
+            url = `${ENGINE_WEB_URL}/interview`;
+          }
+          
+          window.open(url, '_blank');
+          showPremiumToast('Test interview launched in a new tab.', 'success');
+        } catch (err) {
+          console.error('Failed to create test session:', err);
+          const interviewSlug = (job.roleName || 'role').toLowerCase().replace(/[^a-z0-9]+/g, '-') + job.id.slice(0, 6);
+          const interviewLink = `${ENGINE_WEB_URL}/interview/${interviewSlug}`;
+          window.open(interviewLink, '_blank');
+        } finally {
+          tryBtn.disabled = false;
+          tryBtn.innerHTML = originalText;
+        }
+      });
+    }
+
+    const regenBtn = panel.querySelector('#btn-regenerate-ai-resp');
+    if (regenBtn) {
+      regenBtn.addEventListener('click', () => {
+        soundEngine.playChime([392, 523.25], 0.1, 0.1);
+        showPremiumToast('AI evaluation report regenerated successfully.', 'success');
+      });
+    }
+
+    const notifyBtn = panel.querySelector('#btn-notify-me');
+    if (notifyBtn) {
+      notifyBtn.addEventListener('click', () => {
+        soundEngine.playChime([392, 523.25], 0.1, 0.1);
+        showPremiumToast('You will be notified once the report is ready.', 'success');
+      });
+    }
+
+    panel.querySelectorAll('.btn-preview-report').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const candId = btn.dataset.candId;
+        openReportDrawerForCandidate(candId);
+      });
+    });
+
+    const customizeBtn = panel.querySelector('.btn-customize');
+    if (customizeBtn) {
+      customizeBtn.addEventListener('click', () => {
+        navigateToJobDetail(job.id);
+        setTimeout(() => {
+          const tab = document.querySelector('.jd-tab[data-jd-tab="questions"]');
+          if (tab) tab.click();
+        }, 60);
+      });
+    }
+
+  } else if (activeTab === 'settings') {
+    panel.querySelectorAll('.setting-toggle').forEach(toggle => {
+      toggle.addEventListener('change', () => {
+        const setting = toggle.dataset.setting;
+        const val = toggle.checked;
+        
+        job.pipelineConfig[stageKey][setting] = val;
+        
+        if (setting === 'enabled') {
+          const card = document.querySelector(`.jf-stage-card[data-stage="${stageKey}"]`);
+          if (card) {
+            card.classList.toggle('enabled', val);
+            card.classList.toggle('disabled', !val);
+          }
+          if (!val) {
+            migrateCandidatesOfJob(job);
+          }
+          recalculateJobPipelines();
+          renderJobCards();
+          renderJobFlowPipeline(job);
+        }
+        
+        saveStateToLocalStorage();
+        scheduleJobSave(job);
+        showPremiumToast('Settings saved successfully.', 'success');
+      });
+    });
+
+    panel.querySelectorAll('.setting-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const setting = sel.dataset.setting;
+        const val = sel.value;
+        
+        job.pipelineConfig[stageKey][setting] = val;
+        
+        saveStateToLocalStorage();
+        scheduleJobSave(job);
+        showPremiumToast('Settings saved successfully.', 'success');
+      });
+    });
+
+    const salesBtn = panel.querySelector('.btn-contact-sales');
+    if (salesBtn) {
+      salesBtn.addEventListener('click', () => {
+        soundEngine.playChime([392, 523.25], 0.1, 0.1);
+        showPremiumToast('Thank you! Our sales team will get in touch with you shortly.', 'success');
+      });
+    }
+
+    const customizeBtn = panel.querySelector('.btn-customize');
+    if (customizeBtn) {
+      customizeBtn.addEventListener('click', () => {
+        navigateToJobDetail(job.id);
+        setTimeout(() => {
+          const tab = document.querySelector('.jd-tab[data-jd-tab="questions"]');
+          if (tab) tab.click();
+        }, 60);
+      });
+    }
+  }
 }
+
 function renderFunnelStages(job) {
   const container = document.getElementById('jd-funnel-stages');
   if (!container) return;

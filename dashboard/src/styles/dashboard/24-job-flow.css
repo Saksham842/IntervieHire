@@ -769,3 +769,82 @@ body.light-theme .jf-fields-header { border-color: rgba(0,0,0,0.06); }
 body.light-theme .jf-param-table-header { color: rgba(0,0,0,0.4); }
 body.light-theme .jf-stage-connector svg { stroke: rgba(0,0,0,0.2); }
 
+/* Test Interview and Settings additions */
+.jf-settings-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.jf-settings-item:last-child {
+  border-bottom: none;
+}
+.jf-settings-item-left {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.jf-settings-icon {
+  font-size: 1.25rem;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.jf-settings-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+.jf-settings-desc {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+.jf-settings-action {
+  flex-shrink: 0;
+}
+.jf-test-interview-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 16px;
+}
+.test-responses-section table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.test-responses-section th, .test-responses-section td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--glass-border);
+}
+.test-responses-section th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  background: rgba(255,255,255,0.01);
+}
+.test-responses-section tr:last-child td {
+  border-bottom: none;
+}
+.report-info-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 10px;
+  margin-top: 8px;
+}
+body.light-theme .report-info-banner {
+  background: rgba(99, 102, 241, 0.04);
+  border-color: rgba(99, 102, 241, 0.12);
+}
+
+
