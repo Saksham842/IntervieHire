@@ -20,7 +20,7 @@ import { soundEngine } from './sound.js';
 import { initSourcing, navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { renderSpotlightResults, SpotlightCommands, spotlightUi, toggleSpotlightModal } from './spotlight.js';
 import { AppState, generateJobId } from './state.js';
-import { apiCreateJob, apiPatchJobParameters, isApiMode, getDataSource } from './api.js';
+import { apiCreateJob, apiPatchJobParameters, apiDeleteJob, apiUpdateJobStatus, isApiMode, getDataSource } from './api.js';
 
 // ==========================================
 // COMPONENT MOUNT BINDINGS
@@ -271,35 +271,40 @@ function initMountBindings() {
         }, 100);
         break;
       case 'archive':
-        job.status = 'archived';
+      case 'unarchive': {
+        const prev = job.status;
+        const next = action === 'archive' ? 'archived' : 'published';
+        const label = action === 'archive' ? 'archived' : 'restored';
+        job.status = next;
+        saveStateToLocalStorage();
         renderJobCards();
         updateJobsCounters();
-        showPremiumToast(`"${job.cardName || job.roleName}" has been archived.`, 'success');
+        if (getDataSource() === 'api' && job._backend) {
+          // Persist the status change; roll back if the backend rejects it.
+          apiUpdateJobStatus(job.id, next).catch((e) => {
+            job.status = prev;
+            saveStateToLocalStorage();
+            renderJobCards();
+            updateJobsCounters();
+            showPremiumToast(`Couldn't ${action} "${job.cardName || job.roleName}": ${(e && e.message) || 'backend error'}`, 'error');
+          });
+        }
+        showPremiumToast(`"${job.cardName || job.roleName}" has been ${label}.`, 'success');
         break;
-      case 'unarchive':
-        job.status = 'published';
-        renderJobCards();
-        updateJobsCounters();
-        showPremiumToast(`"${job.cardName || job.roleName}" has been restored.`, 'success');
-        break;
+      }
       case 'delete': {
         const name = job.cardName || job.roleName;
         const idx = AppState.jobs.findIndex(j => j.id === jobId);
         if (idx === -1) break;
+        const isBackend = getDataSource() === 'api' && job._backend;
         const removedJob = AppState.jobs[idx];
-        const removedCandidates = AppState.candidates.filter(c => {
-          if (getDataSource() === 'api' && job._backend) {
-            return c.jobId === job.id;
-          }
-          return c.jobApplied === job.roleName || c.jobApplied === job.cardName;
-        });
+        const removedCandidates = AppState.candidates.filter(c => isBackend
+          ? c.jobId === job.id
+          : (c.jobApplied === job.roleName || c.jobApplied === job.cardName));
         AppState.jobs.splice(idx, 1);
-        AppState.candidates = AppState.candidates.filter(c => {
-          if (getDataSource() === 'api' && job._backend) {
-            return c.jobId !== job.id;
-          }
-          return c.jobApplied !== job.roleName && c.jobApplied !== job.cardName;
-        });
+        AppState.candidates = AppState.candidates.filter(c => isBackend
+          ? c.jobId !== job.id
+          : (c.jobApplied !== job.roleName && c.jobApplied !== job.cardName));
         saveStateToLocalStorage();
         const restoreJob = () => {
           AppState.jobs.splice(Math.min(idx, AppState.jobs.length), 0, removedJob);
@@ -310,12 +315,29 @@ function initMountBindings() {
           updateSummaryMetrics();
           showPremiumToast(`"${name}" restored.`, 'success');
         };
-        setTimeout(() => {
-          renderJobCards();
-          updateJobsCounters();
-          updateSummaryMetrics();
-          showPremiumToast(`"${name}" deleted.`, 'success', { label: 'Undo', onClick: restoreJob });
-        }, 0);
+        if (isBackend) {
+          // Persist immediately so the job stays gone after a refetch. Roll the
+          // optimistic removal back if the backend rejects the delete. No Undo
+          // here: the backend hard-deletes (cascading applicants), so a local
+          // re-insert couldn't truly restore it.
+          apiDeleteJob(job.id).catch((e) => {
+            restoreJob();
+            showPremiumToast(`Couldn't delete "${name}": ${(e && e.message) || 'backend error'}`, 'error');
+          });
+          setTimeout(() => {
+            renderJobCards();
+            updateJobsCounters();
+            updateSummaryMetrics();
+            showPremiumToast(`"${name}" deleted.`, 'success');
+          }, 0);
+        } else {
+          setTimeout(() => {
+            renderJobCards();
+            updateJobsCounters();
+            updateSummaryMetrics();
+            showPremiumToast(`"${name}" deleted.`, 'success', { label: 'Undo', onClick: restoreJob });
+          }, 0);
+        }
         break;
       }
     }

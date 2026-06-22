@@ -61,6 +61,15 @@ export async function apiPatchJobParameters(id, job) {
   const body = mapJobToParametersPayload(job);
   return request(`/jobs/${id}/parameters`, { method: 'PATCH', body });
 }
+// Delete a job on the backend so it stays gone after a refetch. The backend
+// cascades its applicants + collaborators (see jobs.py delete_job).
+export async function apiDeleteJob(id) {
+  return request(`/jobs/${id}`, { method: 'DELETE' });
+}
+// Persist a job's status (archive / unarchive / publish) so it survives a refetch.
+export async function apiUpdateJobStatus(id, status) {
+  return request(`/jobs/${id}/settings`, { method: 'PATCH', body: { status } });
+}
 
 // Debounced backend autosave for job parameters (scoring config, criteria, flow,
 // questions). Any feature that mutates a job calls this right after
