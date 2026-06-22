@@ -1427,6 +1427,30 @@ def create_test_session(
     return {"session_id": str(test_applicant.id)}
 
 
+@router.get("/{job_id}/test-report")
+def get_test_report(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    active_org_id: Optional[UUID] = Depends(get_active_org_id),
+    db: Session = Depends(get_db)
+):
+    """Read-only: return the report for this job's throwaway "Run test interview"
+    session so the recruiter can review it in Deep Analysis. The test applicant is
+    deliberately excluded from the funnel, responses tabs and analytics, so this
+    dedicated endpoint surfaces only its evaluation (no pollution of those counts).
+    Returns {exists, evaluated, status, report}."""
+    _verify_job_access(job_id, current_user, active_org_id, db)
+    test_applicant = db.query(Applicant).filter(
+        Applicant.job_id == job_id,
+        Applicant.remarks == TEST_SESSION_REMARK
+    ).first()
+    if not test_applicant:
+        return {"exists": False, "evaluated": False, "status": "none", "report": None}
+    from app.utils.ai_sync import get_applicant_full_report
+    full = get_applicant_full_report(db, str(test_applicant.id))
+    return {"exists": True, **full}
+
+
 
 # ─── RESPONSES (candidates for a job) ────────────────────────────────────────
 

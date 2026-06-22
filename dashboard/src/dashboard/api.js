@@ -95,6 +95,17 @@ export async function apiFetchCandidateReport(applicantId) {
   return mapFullReportToCandidateReport(data);
 }
 
+// Deep Analysis: the "Run test interview" result for a job. Test interviews use a
+// throwaway candidate that is (by design) kept out of the roster, funnel and
+// analytics, so this fetches just its evaluation. Returns the report or null
+// until the engine has scored the test interview.
+export async function apiFetchTestReport(jobId) {
+  const data = await request(`/jobs/${jobId}/test-report`);
+  if (!data || !data.exists || !data.evaluated) return null;
+  const report = data.report;
+  return report && Array.isArray(report.questionBreakdown) ? report : null;
+}
+
 export async function apiFetchUsageStats(params = {}) {
   const qs = new URLSearchParams();
   if (params.date_from) qs.set('date_from', params.date_from);
