@@ -94,6 +94,10 @@ function toggleHeaderElementsForJobFlow(showJobFlowHeader, job = null) {
     if (themeToggle) themeToggle.style.display = '';
     if (interviewSettings) interviewSettings.style.display = '';
     
+    // Leaving the flow without acting drops any pending Add-Candidates intent, so
+    // a later deliberate re-open of the same job doesn't resurrect a stale banner.
+    pendingAddCandidates = null;
+
     const collabBtn = document.getElementById('jf-header-collab-btn');
     const publishBtn = document.getElementById('jf-header-publish-btn');
     if (collabBtn) collabBtn.style.display = 'none';
@@ -738,7 +742,7 @@ function renderResumeAnalysisConfig(job, panel) {
           <p class="ra-criteria-group-desc">Candidates meeting these criteria will be shortlisted; others waitlisted for review</p>
         </div>
       </div>
-      <div class="ra-criteria-items">${criteria.mustHave.map((item, i) => `<div class="ra-criteria-item must-have"><span class="ra-criteria-num must-have">${i+1}</span><span class="ra-criteria-text">${item}</span></div>`).join('')}</div>
+      <div class="ra-criteria-items">${criteria.mustHave.map((item, i) => `<div class="ra-criteria-item must-have"><span class="ra-criteria-num must-have">${i+1}</span><span class="ra-criteria-text">${escapeHTML(item)}</span></div>`).join('')}</div>
     </div>
 
     <div class="ra-criteria-divider"><span class="ra-criteria-divider-text">AND</span></div>
@@ -751,7 +755,7 @@ function renderResumeAnalysisConfig(job, panel) {
           <p class="ra-criteria-group-desc">Candidates with no red flags will be shortlisted; others waitlisted for review</p>
         </div>
       </div>
-      <div class="ra-criteria-items">${criteria.redFlags.map((item, i) => `<div class="ra-criteria-item red-flags"><span class="ra-criteria-num red-flags">${i+1}</span><span class="ra-criteria-text">${item}</span></div>`).join('')}</div>
+      <div class="ra-criteria-items">${criteria.redFlags.map((item, i) => `<div class="ra-criteria-item red-flags"><span class="ra-criteria-num red-flags">${i+1}</span><span class="ra-criteria-text">${escapeHTML(item)}</span></div>`).join('')}</div>
     </div>
 
     <div class="ra-criteria-divider"><span class="ra-criteria-divider-text">AND</span></div>
@@ -765,7 +769,7 @@ function renderResumeAnalysisConfig(job, panel) {
         </div>
       </div>
       <div class="ra-criteria-min-match">Minimum match: ${criteria.goodToHaveMinMatch} out of ${criteria.goodToHave.length} criteria</div>
-      <div class="ra-criteria-items">${criteria.goodToHave.map((item, i) => `<div class="ra-criteria-item good-to-have"><span class="ra-criteria-num good-to-have">${i+1}</span><span class="ra-criteria-text">${item}</span></div>`).join('')}</div>
+      <div class="ra-criteria-items">${criteria.goodToHave.map((item, i) => `<div class="ra-criteria-item good-to-have"><span class="ra-criteria-num good-to-have">${i+1}</span><span class="ra-criteria-text">${escapeHTML(item)}</span></div>`).join('')}</div>
     </div>
   `;
 }
@@ -786,7 +790,7 @@ function renderResumeAnalysisFlowConfig(job, panel) {
     ` : `
       <div class="ra-criteria-item ${tone}">
         <span class="ra-criteria-num ${tone}">${i + 1}</span>
-        <span class="ra-criteria-text">${item}</span>
+        <span class="ra-criteria-text">${escapeHTML(item)}</span>
       </div>
     `).join('');
     if (!isEditing) return html;

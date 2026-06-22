@@ -247,11 +247,23 @@ export async function interviewRoutes(app: FastifyInstance) {
     if (s.allowReattempt === false && (session.status === 'COMPLETED' || session.status === 'EVALUATED')) {
       return reply.code(403).send({ error: 'This interview has already been completed.', code: 'NO_REATTEMPT' });
     }
-    if (s.allowLate === false && session.scheduledAt && Date.now() > new Date(session.scheduledAt).getTime()) {
+    // A small grace buffer so a punctual candidate starting a few moments after
+    // their slot (clock skew, page load) isn't rejected when late attempts are off.
+    const LATE_GRACE_MS = 5 * 60 * 1000;
+    if (s.allowLate === false && session.scheduledAt && Date.now() > new Date(session.scheduledAt).getTime() + LATE_GRACE_MS) {
       return reply.code(403).send({ error: 'The scheduled interview window has passed.', code: 'LATE_ATTEMPT' });
     }
     if (s.requireCv === true && !session.candidate?.resumeText) {
       return reply.code(400).send({ error: 'A CV/resume is required before starting this interview.', code: 'CV_REQUIRED' });
+    }
+    // accessControl: 'link' (default) = anyone with the link. 'scheduled' requires a
+    // scheduled slot; 'invited' requires a linked candidate record. Permissive for
+    // unknown/legacy values so existing sessions keep working.
+    if (s.accessControl === 'scheduled' && !session.scheduledAt) {
+      return reply.code(403).send({ error: 'This interview is open to scheduled candidates only.', code: 'ACCESS_SCHEDULED_ONLY' });
+    }
+    if (s.accessControl === 'invited' && !session.candidate) {
+      return reply.code(403).send({ error: 'This interview is open to invited candidates only.', code: 'ACCESS_INVITED_ONLY' });
     }
     const firstQuestion = session.jobRole.questions[0]?.text ?? 'Tell me about your software engineering background.';
     // continueFromMiddle: default on (resume). An explicit false starts fresh,
