@@ -896,7 +896,7 @@ function bindStudio(pane, job) {
   // questionType/severity just re-render so chips/tints update.
   pane.onchange = (e) => {
     const diff = e.target.closest('[data-action="edit"][data-field="difficulty"]');
-    if (diff) { handleDifficultyRegen(job, diff.getAttribute('data-q-id'), reRender, diff.value); return; }
+    if (diff) { handleDifficultyRegen(job, diff.dataset.qId, reRender, diff.value); return; }
     const el = e.target.closest('.bs-select, .bs-sev-select');
     if (el) reRender();
   };

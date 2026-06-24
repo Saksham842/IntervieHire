@@ -1880,6 +1880,17 @@ def upload_resumes(
     for file_path, filename in files_to_process:
         from app.utils.resume_parser import parse_resume_with_deepseek, extract_text_from_file
         parsed_info = parse_resume_with_deepseek(file_path, filename, deepseek_key)
+
+        # Persist the raw resume text so re-analysis survives an ephemeral-filesystem
+        # wipe (Railway clears uploads/ on restart, leaving resume_url dangling).
+        resume_text = None
+        try:
+            resume_text = extract_text_from_file(file_path)
+        except Exception as parse_err:
+            print(f"Error extracting resume text from {file_path}: {parse_err}")
+        if resume_text and len(resume_text.strip()) < 50:
+            resume_text = None  # extraction likely failed (scanned/garbled) — don't poison analysis with junk
+
         parsed_name = parsed_info.get("name")
         parsed_email = parsed_info.get("email")
         parsed_phone = parsed_info.get("phone")
