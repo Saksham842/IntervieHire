@@ -256,15 +256,16 @@ class WebSearchAdapter:
             return locs[:5]
         return [brief.get("location")]
 
-    def _plan_queries(self, brief: Dict[str, Any]) -> List[str]:
+    def _plan_queries(self, brief: Dict[str, Any], provider: Optional[str] = None) -> List[str]:
         title = str(brief.get("title") or "").strip()
         title_q = f'"{title}"' if title else "developer"
         student = self._student_clause(brief)
-        # DuckDuckGo (the keyless default) returns NOTHING for long, over-constrained
-        # queries, so keep DDG queries lean — role + location + site filter, at most
-        # one skill. Skill matching still happens later in fit-scoring, so recall is
-        # what matters here. API providers (Google/Brave/SearXNG) get the richer form.
-        ddg = (self.provider == "duckduckgo")
+        # DuckDuckGo (the keyless default/fallback) returns NOTHING for long,
+        # over-constrained queries, so keep DDG queries lean — role + location +
+        # site filter, at most one skill. Skill matching still happens later in
+        # fit-scoring, so recall is what matters here. API providers (Google/
+        # Brave/SearXNG) get the richer form.
+        ddg = ((provider or self.provider) == "duckduckgo")
         skills = self._skills_str(brief, 1 if ddg else 3)
         queries: List[str] = []
         for loc in self._locations(brief):
@@ -291,31 +292,33 @@ class WebSearchAdapter:
         return out[: (4 if ddg else 6)]
 
     # ── provider call ─────────────────────────────────────────────────────────
-    def _raw_results(self, q: str) -> List[Dict[str, str]]:
+    def _raw_results(self, q: str, provider: Optional[str] = None, creds: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+        provider = provider or self.provider
+        creds = creds if creds is not None else self._creds
         try:
-            if self.provider == "google_cse":
+            if provider == "google_cse":
                 r = requests.get("https://www.googleapis.com/customsearch/v1",
-                                 params={"key": self._creds["key"], "cx": self._creds["cx"], "q": q, "num": 10},
+                                 params={"key": creds["key"], "cx": creds["cx"], "q": q, "num": 10},
                                  timeout=15)
                 r.raise_for_status()
                 return [{"title": i.get("title", ""), "url": i.get("link", ""), "description": i.get("snippet", "")}
                         for i in (r.json().get("items") or [])]
-            if self.provider == "searxng":
-                r = requests.get(f"{self._creds['url']}/search",
+            if provider == "searxng":
+                r = requests.get(f"{creds['url']}/search",
                                  params={"q": q, "format": "json"},
                                  headers={"User-Agent": "IntervieHire-TalentFinder"}, timeout=15)
                 r.raise_for_status()
                 return [{"title": i.get("title", ""), "url": i.get("url", ""), "description": i.get("content", "")}
                         for i in (r.json().get("results") or [])][:20]
-            if self.provider == "brave":
+            if provider == "brave":
                 r = requests.get(os.getenv("BRAVE_SEARCH_ENDPOINT") or "https://api.search.brave.com/res/v1/web/search",
                                  params={"q": q, "count": 20},
-                                 headers={"X-Subscription-Token": self._creds["key"], "Accept": "application/json"},
+                                 headers={"X-Subscription-Token": creds["key"], "Accept": "application/json"},
                                  timeout=15)
                 r.raise_for_status()
                 return [{"title": i.get("title", ""), "url": i.get("url", ""), "description": i.get("description", "")}
                         for i in (((r.json() or {}).get("web") or {}).get("results") or [])]
-            if self.provider == "duckduckgo":
+            if provider == "duckduckgo":
                 return self._ddg_results(q)
         except Exception:
             return []
@@ -427,23 +430,19 @@ class WebSearchAdapter:
             cand["availability_status"] = "open"   # students/new-grads are actively looking
         return cand
 
-    def search_candidates(self, brief: Dict[str, Any]) -> List[Dict[str, Any]]:
-        if not self.provider:
-            return []
+    def _search_with(self, brief: Dict[str, Any], provider: str, creds: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Run the full query plan against ONE provider and return candidates."""
+        import time
         locs = self._locations(brief)
-        queries = self._plan_queries(brief)
-        # remember which country each query targeted (parallel to the plan order)
+        queries = self._plan_queries(brief, provider)
         out: List[Dict[str, Any]] = []
         seen_urls: set = set()
-        # map each query back to a loc hint: queries are emitted per-loc in groups,
-        # so recompute the hint from the query text where possible.
-        import time
         for qi, q in enumerate(queries):
             # Pace DuckDuckGo requests so we don't trip its rate limiter mid-search.
-            if self.provider == "duckduckgo" and qi > 0:
+            if provider == "duckduckgo" and qi > 0:
                 time.sleep(1.2)
             loc_hint = next((l for l in locs if l and f'"{l}"' in q), brief.get("location"))
-            for res in self._raw_results(q):
+            for res in self._raw_results(q, provider, creds):
                 u = (res.get("url") or "").rstrip("/").lower()
                 if not u or u in seen_urls:
                     continue
@@ -453,6 +452,18 @@ class WebSearchAdapter:
                     out.append(cand)
             if len(out) >= int(brief.get("_web_cap") or 60):
                 break
+        return out
+
+    def search_candidates(self, brief: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not self.provider:
+            return []
+        out = self._search_with(brief, self.provider, self._creds)
+        # Resilience: if a configured API provider (Google CSE / SearXNG / Brave)
+        # returns nothing — misconfig, quota, or an API still propagating after
+        # enablement — fall back to the keyless DuckDuckGo path so sourcing still
+        # works. (No-op when the provider already IS duckduckgo, or it's disabled.)
+        if not out and self.provider != "duckduckgo" and not self._env("TALENT_DISABLE_DDG"):
+            out = self._search_with(brief, "duckduckgo", {})
         return out
 
     def normalize(self, raw: Dict[str, Any]) -> Dict[str, Any]:
