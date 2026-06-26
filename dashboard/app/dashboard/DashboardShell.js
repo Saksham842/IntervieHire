@@ -75,7 +75,12 @@ function navigateToPath(path) {
     const rawJobId = segments[2];
     const jobId = rawJobId && rawJobId.includes('--') ? rawJobId.split('--').pop() : rawJobId;
     if (jobId) {
-      window.navigateToSourcing?.(jobId);
+      // Preserve the stage the flow was opened for across a hard refresh
+      // (navigateToSourcing sanitizes anything unexpected back to null).
+      const stage = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('stage')
+        : null;
+      window.navigateToSourcing?.(jobId, stage);
     }
   } else if (sub === 'settings') {
     window.navigateToSubtab?.('settings-general');

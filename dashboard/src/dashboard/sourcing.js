@@ -9,7 +9,7 @@ import { isGarbageText, resumeIdentityCache, resumeTextCache, runBulkResumeAnaly
 import { soundEngine } from './sound.js';
 import { AppState, defaultInterviewSettings } from './state.js';
 import { pushUrl } from './url-sync.js';
-import { isApiMode, apiAddApplicant, apiUpdateApplicant, apiUploadResumes, scheduleJobSave } from './api.js';
+import { isApiMode, apiAddApplicant, apiUpdateApplicant, scheduleJobSave } from './api.js';
 import { saveStateToLocalStorage } from './ai-api.js';
 
 // ============================================================
@@ -21,6 +21,11 @@ let csvParsedCandidates = [];
 let uploadedFiles = [];
 let currentSourcingMode = 'schedule';
 let currentSourcingTab = 'csv';
+// When the sourcing flow is opened from a specific pipeline stage tab
+// ('resume' | 'screening' | 'functional'), imported candidates land in that
+// stage instead of being driven by the Analyse/Schedule mode toggle. null = the
+// general flow (opened from Overview etc.), where the mode toggle decides.
+let sourcingTargetStage = null;
 
 function initSourcing() {
   // Bind click on '+ Add Applicants' inside job detail overview
@@ -30,18 +35,11 @@ function initSourcing() {
       e.preventDefault();
       const activeTabEl = document.querySelector('.jd-tab.active');
       const tabId = activeTabEl ? activeTabEl.getAttribute('data-jd-tab') : 'overview';
-      if (['resume', 'screening', 'functional'].includes(tabId)) {
-        const inlineBtn = document.getElementById(`btn-add-applicants-${tabId}`);
-        if (inlineBtn) {
-          inlineBtn.click();
-          const panel = document.getElementById(`add-applicants-panel-${tabId}`);
-          if (panel) {
-            panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-          return;
-        }
-      }
-      navigateToSourcing(AppState.activeJobId);
+      // From a pipeline-stage tab, open the sourcing flow targeted at that stage
+      // so applicants are added there specifically; everything else (Overview,
+      // etc.) opens the general flow.
+      const targetStage = ['resume', 'screening', 'functional'].includes(tabId) ? tabId : null;
+      navigateToSourcing(AppState.activeJobId, targetStage);
     });
   }
 
@@ -447,13 +445,18 @@ function initSourcing() {
   }
 }
 
-function navigateToSourcing(jobId) {
+function navigateToSourcing(jobId, targetStage = null) {
   const job = AppState.jobs.find(j => j.id === jobId);
   if (!job) return;
 
   AppState.activeJobId = jobId;
   AppState.activeTab = 'sourcing';
-  pushUrl(`/dashboard/sourcing/${jobId}`);
+  // Reset on every entry so a prior stage-scoped visit never leaks into the next.
+  sourcingTargetStage = ['resume', 'screening', 'functional'].includes(targetStage) ? targetStage : null;
+  // Encode the target stage as a query param so it survives a hard refresh (the
+  // pathname is unchanged, so Next routing is unaffected); DashboardShell reads it
+  // back on mount and re-targets the stage.
+  pushUrl(`/dashboard/sourcing/${jobId}${sourcingTargetStage ? `?stage=${sourcingTargetStage}` : ''}`);
 
   // Highlight Jobs sidebar
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(item => {
@@ -491,8 +494,9 @@ function navigateToSourcing(jobId) {
   const fileRes = document.getElementById('input-file-resumes');
   if (fileRes) fileRes.value = '';
 
-  // Default mode & tab
-  switchSourcingMode('schedule');
+  // Default mode & tab — a Resume-stage entry starts in Analyse mode (resume
+  // upload); Screening/Functional and the general flow start in Schedule mode.
+  switchSourcingMode(sourcingTargetStage === 'resume' ? 'analyse' : 'schedule');
 
   setTimeout(updateAllSlidingPills, 50);
   soundEngine.playChime([329.63, 392.00, 523.25], 0.15, 0.08);
@@ -876,7 +880,10 @@ async function importResumesCandidates() {
   const backendIds = await persistImportedCandidates(importedCandIds, activeJob);
   navigateToJobDetail(AppState.activeJobId);
 
-  if (currentSourcingMode === 'analyse') {
+  // Auto-run resume analysis only for the Resume stage: a stage-scoped visit runs
+  // it iff it targets Resume; the general flow runs it in Analyse mode.
+  const shouldAnalyse = sourcingTargetStage ? sourcingTargetStage === 'resume' : currentSourcingMode === 'analyse';
+  if (shouldAnalyse) {
     setTimeout(() => {
       runBulkResumeAnalysis(backendIds, activeJob);
     }, 600);
@@ -1156,7 +1163,12 @@ function addCandidateToAppState(name, email, phone, job, resumeText) {
   const formatHour = hours % 12 || 12;
   const dateStr = `${now.getDate().toString().padStart(2, '0')} ${months[now.getMonth()]} ${now.getFullYear()}, ${formatHour.toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')} ${ampm}`;
 
-  const status = currentSourcingMode === 'analyse' ? 'Resume' : 'Screening';
+  // A stage-scoped sourcing visit pins the landing stage; otherwise the
+  // Analyse/Schedule mode toggle decides (Analyse → Resume, Schedule → Screening).
+  const STAGE_STATUS = { resume: 'Resume', screening: 'Screening', functional: 'Functional' };
+  const status = sourcingTargetStage
+    ? STAGE_STATUS[sourcingTargetStage]
+    : (currentSourcingMode === 'analyse' ? 'Resume' : 'Screening');
   const score = '—';
 
   AppState.candidates.push({
@@ -1199,11 +1211,14 @@ async function persistImportedCandidates(localIds, job) {
     const cand = AppState.candidates.find((c) => c.id === localId);
     if (!cand) continue;
     try {
-      // Schedule-mode candidates (local status 'Screening') persist with
-      // source='scheduled' so the backend sets screening_status=pending and they
-      // appear in Recruiter Screening too; analyse-mode (status 'Resume') sends no
-      // source and stays Resume-only. Still one applicant row either way.
-      const source = cand.status === 'Screening' ? 'scheduled' : null;
+      // Map the candidate's local stage to the backend ApplicantSource so the
+      // applicant lands in the right pipeline stage: 'functional' → Functional
+      // Interview (functional_status=pending), 'scheduled' → Recruiter Screening
+      // (screening_status=pending). Resume-stage candidates send no source and
+      // stay Resume-only. Still one applicant row either way.
+      const source = cand.status === 'Functional' ? 'functional'
+                   : cand.status === 'Screening' ? 'scheduled'
+                   : null;
       const created = await apiAddApplicant(job.id, { name: cand.name, email: cand.email, phone: cand.phone, source });
       if (!created || !created.id) throw new Error('no id returned');
       const uuid = created.id;
