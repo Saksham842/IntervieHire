@@ -851,11 +851,6 @@ export const html = `
                   Functional Interview
                   <span class="jd-count-pill" id="jd-count-functional">0</span>
                 </button>
-                <button class="jd-tab" data-jd-tab="interviewanalysis">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"></path></svg>
-                  Interview Analysis
-                  <span class="jd-count-pill" id="jd-count-interviewanalysis">0</span>
-                </button>
                 <button class="jd-tab" data-jd-tab="questions">
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line><circle cx="12" cy="12" r="10"></circle></svg>
                   Questions Generator
@@ -978,11 +973,6 @@ export const html = `
               </div>
               <div class="jd-pane" id="jd-pane-functional">
                 <div class="jd-stage-candidates-list" id="list-stage-functional"></div>
-              </div>
-
-              <!-- Interview Analysis Pane (rendered by interview-analysis.js) -->
-              <div class="jd-pane" id="jd-pane-interviewanalysis">
-                <div class="jd-stage-candidates-list" id="list-stage-interviewanalysis"></div>
               </div>
 
               <!-- Questions Generator Pane (rendered by blueprint-studio.js) -->

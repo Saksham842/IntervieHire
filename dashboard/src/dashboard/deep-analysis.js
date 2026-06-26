@@ -274,7 +274,7 @@ function renderDetail(job, container, candidate) {
   if (!hasFunctional(candidate)) {
     functionalHTML = `<div class="da-li muted">No functional interview completed yet.</div>`;
   } else if (!apiLive) {
-    functionalHTML = functionalReportBody(buildSampleCandidateReport(candidate, job));
+    functionalHTML = functionalReportBody(buildSampleCandidateReport(candidate, job), candidate);
   } else {
     const entry = liveReports.get(candidate.id);
     if (!entry) {
@@ -285,7 +285,7 @@ function renderDetail(job, container, candidate) {
         .finally(() => { if (daUi.selectedId === candidate.id && AppState.activeJobId === job.id) renderDeepAnalysisPane(job, container); });
       functionalHTML = functionalPending('loading');
     } else if (entry.state === 'ready') {
-      functionalHTML = functionalReportBody(entry.report);
+      functionalHTML = functionalReportBody(entry.report, candidate);
     } else {
       functionalHTML = functionalPending(entry.state, entry.error);
     }
@@ -413,7 +413,73 @@ function rosterRow({ candidate, report }, i) {
   </div>`;
 }
 
-function functionalReportBody(report) {
+// The structured (aviral) report is nested under `.structured`, or is the report
+// itself when generated standalone. Holds the score breakdown (45/55 − penalty
+// formula) and the real proctoring summary. null until the engine scores it.
+function getStructuredReport(report) {
+  if (!report) return null;
+  if (report.structured && report.structured.scoreBreakdown) return report.structured;
+  if (report.scoreBreakdown) return report;
+  return null;
+}
+
+function dlTranscriptBtn(candidate) {
+  if (!candidate || !candidate.id) return '';
+  return `<button class="da-dl-transcript" data-action="dl-transcript" data-cid="${escapeHTML(candidate.id)}" data-name="${escapeHTML(candidate.name || '')}" style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);color:#cfcfcf;border-radius:7px;padding:6px 11px;font-size:12px;cursor:pointer;">⬇ Download transcript</button>`;
+}
+
+// Score breakdown (45% rubric + 55% dimensions − red-flag − proctoring) and the
+// real proctoring/integrity summary. This is the "Interview Analysis" content,
+// folded into Deep Analysis so there's no separate tab. Shown only when the
+// engine produced a structured report; otherwise just offers the transcript.
+function structuredAnalysisSection(report, candidate) {
+  const s = getStructuredReport(report);
+  const dl = dlTranscriptBtn(candidate);
+  if (!s) {
+    return dl ? `<div class="da-section" style="display:flex;justify-content:flex-end;">${dl}</div>` : '';
+  }
+
+  const sb = s.scoreBreakdown || {};
+  const proc = s.proctoring || null;
+  const finalScore = Math.round(sb.finalScore != null ? sb.finalScore : (s.overallScore || 0));
+  const penTone = (v) => ((v || 0) > 0 ? '#f87171' : '#34d399');
+
+  const cell = (label, value, color) => `
+    <div class="da-stat" style="align-items:flex-start;text-align:left;">
+      <span class="da-stat-num"${color ? ` style="color:${color};"` : ''}>${value}</span>
+      <span class="da-stat-label">${escapeHTML(label)}</span>
+    </div>`;
+
+  const cells = [
+    cell('Final score', finalScore, scoreColor(finalScore)),
+    cell('Rubric coverage (45%)', Math.round(sb.rubricCoverageAvg || 0)),
+    cell('Weighted dimensions (55%)', Math.round(sb.dimensionAvg || 0)),
+    cell('Red-flag penalty', `−${Math.round(sb.redFlagPenaltyAvg || 0)}`, penTone(sb.redFlagPenaltyAvg)),
+    cell('Proctoring penalty', `−${Math.round(sb.proctoringPenalty || 0)}`, penTone(sb.proctoringPenalty)),
+  ];
+  if (proc) cells.push(cell('Integrity score', Math.round(proc.integrityScore), scoreColor(proc.integrityScore)));
+
+  const formula = escapeHTML(sb.formula || 'finalAnswerScore = 45% rubric coverage + 55% weighted dimensions − red-flag penalty; overall − proctoring penalty');
+
+  const violations = proc && Array.isArray(proc.violations) ? proc.violations : [];
+  const proctoringBlock = proc ? `
+    <div class="da-section">
+      <h3 class="da-section-title">Proctoring &amp; integrity<span class="da-dim-count" style="color:${(proc.totalEvents || violations.length) ? '#fb923c' : '#34d399'};">${proc.totalEvents != null ? proc.totalEvents : violations.length}</span></h3>
+      ${violations.length
+        ? violations.map((v) => `<div class="da-flag"><span class="da-sev" style="color:${SEV_COLOR[String(v.severity || '').toLowerCase()] || '#9a9a9a'};background:${(SEV_COLOR[String(v.severity || '').toLowerCase()] || '#9a9a9a')}1a;">${escapeHTML(String(v.severity || 'flag'))}</span><span class="da-flag-text">${escapeHTML(String(v.eventType || 'Violation').replace(/_/g, ' '))}${v.detail ? ` — ${escapeHTML(v.detail)}` : ''}</span></div>`).join('')
+        : '<div class="da-li ok">No integrity violations logged during this interview.</div>'}
+    </div>` : '';
+
+  return `
+    <div class="da-section">
+      <h3 class="da-section-title">Interview analysis<span class="da-dim-count" style="color:${scoreColor(finalScore)};">${finalScore}</span>${dl ? `<span style="margin-left:auto;">${dl}</span>` : ''}</h3>
+      <div class="da-stat-strip" style="margin-bottom:8px;">${cells.join('')}</div>
+      <p class="da-li muted" style="font-style:italic;">${formula}</p>
+    </div>
+    ${proctoringBlock}`;
+}
+
+function functionalReportBody(report, candidate) {
   const reco = RECO_META[report.recommendation] || RECO_META.hold;
   const band = scoreColor(report.overallScore);
   const critical = (report.redFlags || []).filter((f) => f.severity === 'critical');
@@ -460,7 +526,9 @@ function functionalReportBody(report) {
       <div class="da-section">
         <h3 class="da-section-title">Suggested next steps</h3>
         ${report.suggestedNextSteps.map((s) => `<div class="da-li step">${escapeHTML(s)}</div>`).join('')}
-      </div>` : ''}`;
+      </div>` : ''}
+
+    ${structuredAnalysisSection(report, candidate)}`;
 }
 
 // "Evaluation dimensions" — the engine can return 15+ raw dimensions across a
@@ -556,6 +624,7 @@ function bind(container, job) {
     if (action === 'select') { daUi.selectedId = el.dataset.cid; daUi.openAnswerId = null; daUi.openDimKey = null; daUi.showAllDims = false; soundEngine.playClick(); renderDeepAnalysisPane(job, container); }
     else if (action === 'back') { daUi.selectedId = null; daUi.openDimKey = null; daUi.showAllDims = false; soundEngine.playClick(); renderDeepAnalysisPane(job, container); }
     else if (action === 'open-report') { soundEngine.playClick(); const cid = el.dataset.cid; import('./report-page.js').then((m) => m.openCandidateReportPage && m.openCandidateReportPage(cid)); }
+    else if (action === 'dl-transcript') { soundEngine.playClick(); const cid = el.dataset.cid; const name = el.dataset.name; import('./report-page.js').then((m) => m.downloadInterviewTranscript && m.downloadInterviewTranscript(cid, name)); }
     else if (action === 'toggle-answer') { const a = el.dataset.aid; daUi.openAnswerId = daUi.openAnswerId === a ? null : a; daUi.openDimKey = null; soundEngine.playClick(); renderDeepAnalysisPane(job, container); }
     else if (action === 'toggle-test') { daUi.testOpen = !daUi.testOpen; soundEngine.playClick(); renderDeepAnalysisPane(job, container); }
     else if (action === 'refresh-test') { testReports.delete(job.id); soundEngine.playClick(); renderDeepAnalysisPane(job, container); }

@@ -784,7 +784,6 @@ async function openCandidateReportPage(candidateId, initialTab = 'overview') {
     { key: 'competencies', label: 'Competencies', icon: '☆' },
     { key: 'resume', label: 'Resume', icon: '🗎' },
     { key: 'screening', label: 'Recruiter Screening', icon: '☷', badge: candidate.recruiterScreening },
-    { key: 'analysis', label: 'Interview Analysis', icon: '📊' },
     { key: 'proctoring', label: 'Proctoring', icon: '◉' },
     { key: 'transcript', label: 'Transcript', icon: '🗩' },
   ];
@@ -824,7 +823,6 @@ async function openCandidateReportPage(candidateId, initialTab = 'overview') {
         <div class="rp-pane" data-rp-pane="competencies">${renderCompetenciesPane(candidate, analysis)}</div>
         <div class="rp-pane" data-rp-pane="resume">${await renderResumePane(candidate, analysis)}</div>
         <div class="rp-pane" data-rp-pane="screening">${renderScreeningPane(candidate)}</div>
-        <div class="rp-pane" data-rp-pane="analysis">${renderInterviewAnalysisPane(candidate, interviewReport)}</div>
         <div class="rp-pane" data-rp-pane="proctoring">${renderProctoringPane(candidate, interviewReport)}</div>
         <div class="rp-pane" data-rp-pane="transcript">${renderTranscriptPane(candidate)}</div>
         <div class="rp-pane" data-rp-pane="remarks">${renderRemarksPane(candidate, analysis)}</div>
@@ -993,4 +991,4 @@ function bindReportPage(candidate, job, analysis, root, initialTab = 'overview')
   });
 }
 
-export { openCandidateReportPage };
+export { openCandidateReportPage, downloadInterviewTranscript };
