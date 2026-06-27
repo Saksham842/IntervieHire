@@ -47,6 +47,44 @@
   box-shadow: var(--glass-shadow-hover), var(--glass-glow-gold-hover);
 }
 
+/* ============================================================
+   JOBS LIST LOADING SKELETON (shown in API mode until the live
+   backend hydrates AppState.jobs — see renderJobsSkeleton())
+   ============================================================ */
+.job-card-skel {
+  min-height: 196px;
+  overflow: hidden;
+  pointer-events: none;
+  cursor: default;
+  justify-content: flex-start;
+}
+.job-card-skel::before { display: none; }
+.job-card-skel .skel-line,
+.job-card-skel .skel-pipe-cell {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+.job-card-skel .skel-line { height: 14px; }
+.job-card-skel .skel-line-title { width: 60%; height: 20px; }
+.job-card-skel .skel-line-sub  { width: 42%; }
+.job-card-skel .skel-line-meta { width: 30%; }
+.job-card-skel .skel-pipeline { display: flex; gap: 12px; margin-top: auto; }
+.job-card-skel .skel-pipe-cell { flex: 1; height: 48px; }
+.skel-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  transform: translateX(-100%);
+  animation: ih-skel-shimmer 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes ih-skel-shimmer {
+  to { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel-shimmer { animation: none; }
+}
+
 .job-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
 .job-card-header-actions { display: flex; align-items: center; gap: 8px; position: relative; }
 .btn-job-kebab {

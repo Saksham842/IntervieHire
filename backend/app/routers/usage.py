@@ -37,10 +37,10 @@ def get_usage_stats(
     visible_job_ids = _get_visible_job_ids(current_user, active_org_id, db)
     if not visible_job_ids:
         return UsageStatsOut(
-            total_applicants=0, career_page=0, bulk_upload=0, scheduled=0, direct_link=0,
-            resume_analysed=0, resume_shortlisted=0, resume_waitlisted=0,
-            screening_attempted=0, screening_scheduled=0, screening_shortlisted=0, screening_waitlisted=0,
-            functional_attempted=0, functional_scheduled=0, functional_shortlisted=0, functional_waitlisted=0
+            total_applicants=0, career_page=0, bulk_upload=0, scheduled=0, direct_link=0, ats=0, other=0,
+            resume_reached=0, resume_analysed=0, resume_shortlisted=0, resume_waitlisted=0,
+            screening_reached=0, screening_attempted=0, screening_scheduled=0, screening_shortlisted=0,
+            functional_reached=0, functional_attempted=0, functional_scheduled=0, functional_shortlisted=0
         )
 
     query = db.query(Applicant).filter(Applicant.job_id.in_(visible_job_ids))
@@ -50,24 +50,53 @@ def get_usage_stats(
         query = query.filter(Applicant.created_at <= date_to)
 
     applicants = query.all()
+    total = len(applicants)
+
+    # Reached-stage flags mirror the dashboard's stage derivation (api.js
+    # mapApplicantOutToCandidate) so the usage funnel agrees with the pipeline
+    # tabs and is monotonic by construction: resume ⊇ screening ⊇ functional.
+    def _reached_functional(a):
+        return a.functional_status is not None or a.decision == "hired"
+
+    def _reached_screening(a):
+        return _reached_functional(a) or a.screening_status is not None or a.decision == "shortlisted"
+
+    def _reached_resume(a):
+        return _reached_screening(a) or bool(a.resume_analysed)
+
+    functional_reached = sum(1 for a in applicants if _reached_functional(a))
+    screening_reached = sum(1 for a in applicants if _reached_screening(a))
+    resume_reached = sum(1 for a in applicants if _reached_resume(a))
+
+    # Entry routes; `other` absorbs unlisted sources (functional / NULL) so the
+    # six route counts always reconcile to total_applicants.
+    career_page = sum(1 for a in applicants if a.source == ApplicantSource.career_page)
+    bulk_upload = sum(1 for a in applicants if a.source == ApplicantSource.bulk_upload)
+    scheduled = sum(1 for a in applicants if a.source == ApplicantSource.scheduled)
+    direct_link = sum(1 for a in applicants if a.source == ApplicantSource.direct_link)
+    ats = sum(1 for a in applicants if a.source == ApplicantSource.ats)
+    other = total - (career_page + bulk_upload + scheduled + direct_link + ats)
 
     return UsageStatsOut(
-        total_applicants=len(applicants),
-        career_page=sum(1 for a in applicants if a.source == ApplicantSource.career_page),
-        bulk_upload=sum(1 for a in applicants if a.source == ApplicantSource.bulk_upload),
-        scheduled=sum(1 for a in applicants if a.source == ApplicantSource.scheduled),
-        direct_link=sum(1 for a in applicants if a.source == ApplicantSource.direct_link),
+        total_applicants=total,
+        career_page=career_page,
+        bulk_upload=bulk_upload,
+        scheduled=scheduled,
+        direct_link=direct_link,
+        ats=ats,
+        other=other,
+        resume_reached=resume_reached,
         resume_analysed=sum(1 for a in applicants if a.resume_analysed),
         resume_shortlisted=sum(1 for a in applicants if a.resume_shortlisted),
         resume_waitlisted=sum(1 for a in applicants if a.resume_waitlisted),
-        screening_attempted=sum(1 for a in applicants if a.screening_status is not None),
-        screening_scheduled=sum(1 for a in applicants if a.screening_status and a.screening_status.value == "scheduled"),
-        screening_shortlisted=sum(1 for a in applicants if a.screening_score and a.screening_score >= 60),
-        screening_waitlisted=0,
-        functional_attempted=sum(1 for a in applicants if a.functional_status is not None),
-        functional_scheduled=sum(1 for a in applicants if a.functional_status and a.functional_status.value == "scheduled"),
-        functional_shortlisted=sum(1 for a in applicants if a.functional_score and a.functional_score >= 60),
-        functional_waitlisted=0,
+        screening_reached=screening_reached,
+        screening_attempted=sum(1 for a in applicants if a.screening_status is not None and a.screening_status.value == "completed"),
+        screening_scheduled=sum(1 for a in applicants if a.screening_status is not None and a.screening_status.value == "scheduled"),
+        screening_shortlisted=functional_reached,
+        functional_reached=functional_reached,
+        functional_attempted=sum(1 for a in applicants if a.functional_status is not None and a.functional_status.value == "completed"),
+        functional_scheduled=sum(1 for a in applicants if a.functional_status is not None and a.functional_status.value == "scheduled"),
+        functional_shortlisted=sum(1 for a in applicants if a.decision == "hired"),
     )
 
 

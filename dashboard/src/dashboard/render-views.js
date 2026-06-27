@@ -16,10 +16,32 @@ import { saveStateToLocalStorage } from './ai-api.js';
 // RENDERING & INTERACTIVE VIEWS
 // ==========================================
 
+// Skeleton placeholders shown while the live backend hydrates the jobs list.
+function renderJobsSkeleton(container) {
+  const cards = Array.from({ length: 6 }, () => `
+    <div class="job-card job-card-skel" aria-hidden="true">
+      <span class="skel-shimmer"></span>
+      <div class="skel-line skel-line-title"></div>
+      <div class="skel-line skel-line-sub"></div>
+      <div class="skel-line skel-line-meta"></div>
+      <div class="skel-pipeline">
+        <div class="skel-pipe-cell"></div>
+        <div class="skel-pipe-cell"></div>
+        <div class="skel-pipe-cell"></div>
+      </div>
+    </div>
+  `).join('');
+  container.innerHTML = cards;
+}
+
 // 1. Render Job Cards (Jobs View)
 function renderJobCards() {
   const container = document.getElementById('jobs-list-container');
   if (!container) return;
+
+  // In API mode the seeded demo jobs must never flash: hold a skeleton until the
+  // live backend has hydrated AppState.jobs (api-bootstrap → hydrateJobs).
+  if (isApiMode() && !AppState.jobsHydrated) { renderJobsSkeleton(container); return; }
 
   container.innerHTML = '';
   const filteredJobs = AppState.jobs.filter(job => {
@@ -363,7 +385,7 @@ function renderAnalyticsTable() {
         cellsHtml += `
           <td>
             <div class="user-cell">
-              <div class="user-avatar-mini">${escapeHTML(c.name.split(' ').map(n => n[0]).join(''))}</div>
+              <div class="user-avatar-mini">${escapeHTML(c.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase())}</div>
               <div class="user-details">
                 <span style="font-weight: 600;">${escapeHTML(c.name)}</span>
                 <span class="user-email-mini">${escapeHTML(c.email)}</span>
@@ -735,55 +757,47 @@ function filterCandidatesByDateRange(candidates) {
 
 function updateSummaryMetrics() {
   const filtered = filterCandidatesByDateRange(AppState.candidates);
+  const total = filtered.length;
 
-  const totalApplicants = filtered.length;
-  const resumeCount = filtered.filter(c => c.status === 'Resume').length;
-  const screeningCount = filtered.filter(c => c.status === 'Screening').length;
-  const functionalCount = filtered.filter(c => c.status === 'Functional').length;
+  // Reached-stage counts mirror the API funnel (applyUsageStats / backend
+  // usage.py) so the local/demo cards are monotonic too: total ≥ resume ≥
+  // screening ≥ functional.
+  const reachedFunctional = filtered.filter(c => c.status === 'Functional' || c.status === 'Hired').length;
+  const reachedScreening = filtered.filter(c => ['Screening', 'Functional', 'Hired'].includes(c.status)).length;
+  const reachedResume = filtered.filter(c => c.status !== 'Rejected').length;
 
-  document.getElementById('stat-total-applicants').textContent = totalApplicants;
-  document.getElementById('stat-resume-analysis').textContent = resumeCount;
-  document.getElementById('stat-recruiter-screening').textContent = screeningCount;
-  document.getElementById('stat-functional-interview').textContent = functionalCount;
+  const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setText('stat-total-applicants', total);
+  setText('stat-resume-analysis', reachedResume);
+  setText('stat-recruiter-screening', reachedScreening);
+  setText('stat-functional-interview', reachedFunctional);
 
-  const bySource = { 'Career Page': 0, 'Bulk Upload': 0, 'Scheduled': 0, 'Direct Link': 0, 'ATS': 0 };
-  filtered.forEach(c => { if (bySource[c.source] !== undefined) bySource[c.source]++; });
+  const setPills = (n, vals) => {
+    const pills = document.querySelectorAll(`.card-metric:nth-child(${n}) .m-pill .v`);
+    vals.forEach((v, i) => { if (pills[i]) pills[i].textContent = v; });
+  };
 
-  const appPills = document.querySelectorAll('.card-metric:nth-child(1) .m-pill .v');
-  if (appPills.length >= 4) {
-    appPills[0].textContent = bySource['Career Page'];
-    appPills[1].textContent = bySource['Bulk Upload'];
-    appPills[2].textContent = bySource['Scheduled'];
-    appPills[3].textContent = bySource['Direct Link'];
-  }
+  // Card 1 — entry routes; `other` absorbs anything outside the five named
+  // routes so the six pills always sum to the total.
+  const cnt = (src) => filtered.filter(c => c.source === src).length;
+  const careerPage = cnt('Career Page'), bulkUpload = cnt('Bulk Upload'),
+        scheduled = cnt('Scheduled'), directLink = cnt('Direct Link'), ats = cnt('ATS');
+  const other = total - (careerPage + bulkUpload + scheduled + directLink + ats);
+  setPills(1, [careerPage, bulkUpload, scheduled, directLink, ats, other]);
 
-  const resPills = document.querySelectorAll('.card-metric:nth-child(2) .m-pill .v');
-  if (resPills.length >= 3) {
-    const analysed = filtered.filter(c => c.status === 'Resume' && c.score !== '—').length;
-    resPills[0].textContent = analysed;
-    resPills[1].textContent = filtered.filter(c => c.status === 'Screening' || c.status === 'Functional').length;
-    resPills[2].textContent = 0;
-  }
+  // Card 2 — resume (demo state has no resume flags; approximate from the funnel).
+  setPills(2, [reachedResume, reachedScreening, 0]);
 
-  const scrPills = document.querySelectorAll('.card-metric:nth-child(3) .m-pill .v');
-  if (scrPills.length >= 4) {
-    const attempted = filtered.filter(c => c.status === 'Screening' && c.interviewStatus === 'Completed').length;
-    const scheduled = filtered.filter(c => c.status === 'Screening' && c.interviewStatus !== 'Completed').length;
-    scrPills[0].textContent = attempted;
-    scrPills[1].textContent = scheduled;
-    scrPills[2].textContent = 0;
-    scrPills[3].textContent = 0;
-  }
+  // Card 3 — recruiter screening.
+  const scrAttempted = filtered.filter(c => c.status === 'Screening' && c.interviewStatus === 'Completed').length;
+  const scrScheduled = filtered.filter(c => c.status === 'Screening' && c.interviewStatus !== 'Completed').length;
+  setPills(3, [scrAttempted, scrScheduled, reachedFunctional]);
 
-  const funPills = document.querySelectorAll('.card-metric:nth-child(4) .m-pill .v');
-  if (funPills.length >= 4) {
-    const attempted = filtered.filter(c => c.status === 'Functional' && c.interviewStatus === 'Completed').length;
-    const scheduled = filtered.filter(c => c.status === 'Functional' && c.interviewStatus !== 'Completed').length;
-    funPills[0].textContent = attempted;
-    funPills[1].textContent = scheduled;
-    funPills[2].textContent = 0;
-    funPills[3].textContent = 0;
-  }
+  // Card 4 — functional interview.
+  const funAttempted = filtered.filter(c => c.status === 'Functional' && c.interviewStatus === 'Completed').length;
+  const funScheduled = filtered.filter(c => c.status === 'Functional' && c.interviewStatus !== 'Completed').length;
+  const hired = filtered.filter(c => c.status === 'Hired').length;
+  setPills(4, [funAttempted, funScheduled, hired]);
 }
 
 
@@ -799,18 +813,40 @@ function applyUsageStats(s) {
   if (!s) return;
   const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? 0; };
   setText('stat-total-applicants', s.total_applicants);
-  setText('stat-resume-analysis', s.resume_analysed);
-  setText('stat-recruiter-screening', s.screening_attempted);
-  setText('stat-functional-interview', s.functional_attempted);
+  setText('stat-resume-analysis', s.resume_reached);
+  setText('stat-recruiter-screening', s.screening_reached);
+  setText('stat-functional-interview', s.functional_reached);
 
   const setPills = (n, vals) => {
     const pills = document.querySelectorAll(`.card-metric:nth-child(${n}) .m-pill .v`);
     vals.forEach((v, i) => { if (pills[i]) pills[i].textContent = v ?? 0; });
   };
-  setPills(1, [s.career_page, s.bulk_upload, s.scheduled, s.direct_link]);
+  setPills(1, [s.career_page, s.bulk_upload, s.scheduled, s.direct_link, s.ats, s.other]);
   setPills(2, [s.resume_analysed, s.resume_shortlisted, s.resume_waitlisted]);
-  setPills(3, [s.screening_attempted, s.screening_scheduled, s.screening_shortlisted, s.screening_waitlisted]);
-  setPills(4, [s.functional_attempted, s.functional_scheduled, s.functional_shortlisted, s.functional_waitlisted]);
+  setPills(3, [s.screening_attempted, s.screening_scheduled, s.screening_shortlisted]);
+  setPills(4, [s.functional_attempted, s.functional_scheduled, s.functional_shortlisted]);
+  // Real numbers are in — drop the loading pulse set by setUsageLoading().
+  document.querySelectorAll('.metrics-grid').forEach((el) => el.classList.remove('is-loading'));
+}
+
+// Neutral loading state for the Usage Overview while /usage/stats is in flight:
+// dash the four headline cards + every pill and skeleton the candidate table so
+// neither the baked-in markup numbers nor demo-derived values flash before the
+// real org data lands. Cleared by applyUsageStats()/renderAnalyticsTable().
+function setUsageLoading() {
+  ['stat-total-applicants', 'stat-resume-analysis', 'stat-recruiter-screening', 'stat-functional-interview']
+    .forEach((id) => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
+  document.querySelectorAll('.card-metric .m-pill .v').forEach((el) => { el.textContent = '—'; });
+  document.querySelectorAll('.metrics-grid').forEach((el) => el.classList.add('is-loading'));
+
+  const table = document.getElementById('analytics-jobs-table');
+  const tbody = document.getElementById('analytics-table-body');
+  if (tbody) {
+    const cols = table?.querySelector('thead tr')?.children.length || 8;
+    tbody.innerHTML = Array.from({ length: 6 }, () =>
+      `<tr class="table-skel-row" aria-hidden="true"><td colspan="${cols}"><span class="table-skel-bar"></span></td></tr>`
+    ).join('');
+  }
 }
 
 // Re-pull just the stat cards for the current date range (used when only the
@@ -834,6 +870,9 @@ async function hydrateUsageAnalytics() {
     renderAnalyticsTable();
     return;
   }
+  // Hold a neutral loading state until the org-scoped stats resolve so no
+  // baked-in markup numbers or demo-derived values flash.
+  setUsageLoading();
   try {
     const { start, end } = getDateRangeBounds();
     const [stats, candidates] = await Promise.all([
@@ -845,6 +884,7 @@ async function hydrateUsageAnalytics() {
       c.jobApplied = job ? (job.roleName || job.cardName || '') : (c.jobApplied || '');
     });
     AppState.candidates = candidates;
+    AppState.usageHydrated = true;
     applyUsageStats(stats);
     renderAnalyticsTable();
   } catch (e) {

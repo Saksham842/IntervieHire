@@ -23,6 +23,11 @@ const AppState = {
   dateRange: 'all',
   resumeStageView: 'all',
 
+  // In API mode the demo seed below must never paint: these flip true once the
+  // live backend has hydrated jobs / usage so renderers can gate on real data.
+  jobsHydrated: false,
+  usageHydrated: false,
+
   jobs: [
     {
       id: 'AKRO62EF45E26EA1',

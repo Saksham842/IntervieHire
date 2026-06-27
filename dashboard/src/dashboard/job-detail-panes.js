@@ -229,7 +229,7 @@ function renderJobDetailPanes(job) {
             <tbody>
               ${displayScreeningCands.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--color-text-faint);">No candidates match the current filters. Try resetting or adjusting them.</td></tr>' : ''}
               ${displayScreeningCands.map(c => {
-                const initials = c.name.split(' ').map(n=>n[0]).join('');
+                const initials = c.name.split(' ').map(n=>n[0]).join('').slice(0, 2).toUpperCase();
                 const hasReport = c.interviewStatus === 'Incomplete' || c.interviewStatus === 'Completed';
                 const actionLabel = c.interviewStatus === 'Slot Missed' ? 'Reschedule' : 'Schedule';
                 const actionClass = c.interviewStatus === 'Slot Missed' ? 'btn-reschedule' : 'btn-schedule';
@@ -341,7 +341,7 @@ function renderJobDetailPanes(job) {
             <tbody>
               ${displayFunctionalCands.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--color-text-faint);">No candidates match the current filters. Try resetting or adjusting them.</td></tr>' : ''}
               ${displayFunctionalCands.map(c => {
-                const initials = c.name.split(' ').map(n=>n[0]).join('');
+                const initials = c.name.split(' ').map(n=>n[0]).join('').slice(0, 2).toUpperCase();
                 return `
                   <tr data-candidate-id="${c.id}">
                     <td><input type="checkbox" class="table-checkbox-row" /></td>

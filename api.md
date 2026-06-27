@@ -6,6 +6,7 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-06-27** — Modified the `UsageStatsOut` response schema of `GET /api/usage/stats` (request/auth unchanged). ADDED fields: `ats`, `other`, `resume_reached`, `screening_reached`, `functional_reached`. REMOVED fields: `screening_waitlisted`, `functional_waitlisted`. The six entry-route counts (`career_page`/`bulk_upload`/`scheduled`/`direct_link`/`ats`/`other`) now reconcile exactly to `total_applicants` (`other` absorbs the `functional`/NULL sources), and the headline stage counts form a monotonic funnel `total_applicants ≥ resume_reached ≥ screening_reached ≥ functional_reached` (`screening_attempted`/`functional_attempted` now count only **completed** interviews; `screening_shortlisted` = advanced past screening = `functional_reached`; `functional_shortlisted` = `decision == "hired"`).
 - **2026-06-26** — Added `entry_method` (nullable string recording **how** a candidate was added — `bulk_upload` | `ats` | `direct_link` | `career_page`; **independent** of `source`, which is the `ApplicantSource` enum that routes the applicant to a pipeline stage) to `AddApplicantIn` and `ApplicantOut`. Affected routes: `POST /api/jobs/{job_id}/applicants` (request body + response gain optional `entry_method`; client may send it), `POST /api/jobs/{job_id}/applicants/bulk` (each `BulkApplicantsIn.applicants[]` item inherits `entry_method` from `AddApplicantIn`, and each response item carries it), and `GET /api/jobs/{job_id}/responses` (serialized applicant objects now include `entry_method`). `POST /api/jobs/{job_id}/applicants/upload-resumes` server-sets `entry_method="bulk_upload"` on every applicant it creates (no client override on that route). DB migration: `init_db()` now runs the idempotent `ALTER TABLE applicants ADD COLUMN IF NOT EXISTS entry_method VARCHAR;`.
 - **2026-06-24** — Documented Talent Finder (13 routes under `/api/talent-finder`), merged in from origin/master's talent-finder feature (`backend/app/talent_finder/`, mounted in `main.py`). Route groups: search (POST /search, GET /search/{search_id}/status, GET /search/{search_id}/results), candidates (GET·DELETE /candidates/{candidate_id}, POST /candidates/{candidate_id}/shortlist·/reject·/opt-out·/move-to-pipeline·/generate-outreach), extract-brief (POST /extract-brief), import/csv (POST /import/csv), sources (GET /sources, POST /sources/configure). All require auth (get_current_user) and are org-scoped via get_active_org_id; responses are plain dicts (no Pydantic response_model).
 - **2026-06-24** — Added PATCH /api/team/{user_id} — update a team member's designation, user_type, and/or status (org-scoped). New UpdateMemberIn request schema.
@@ -1235,23 +1236,26 @@ Response:
   "bulk_upload": 0,
   "scheduled": 0,
   "direct_link": 0,
+  "ats": 0,
+  "other": 0,
+  "resume_reached": 0,
   "resume_analysed": 0,
   "resume_shortlisted": 0,
   "resume_waitlisted": 0,
+  "screening_reached": 0,
   "screening_attempted": 0,
   "screening_scheduled": 0,
   "screening_shortlisted": 0,
-  "screening_waitlisted": 0,
+  "functional_reached": 0,
   "functional_attempted": 0,
   "functional_scheduled": 0,
-  "functional_shortlisted": 0,
-  "functional_waitlisted": 0
+  "functional_shortlisted": 0
 }
 ```
 
 Status codes: 200 OK (all-zero when no visible jobs / no resolvable org); 401 Unauthorized; 422 Unprocessable Entity (un-parseable date value).
 
-Notes: ApplicantSource values are career_page, bulk_upload, direct_link, scheduled, ats, functional — 'ats'/'functional' sources are NOT reflected in any source count field. screening/functional_scheduled compare the .value of InterviewStatus (pending, scheduled, completed, slot_missed, incomplete). Shortlisted counts use hardcoded >= 60 threshold. waitlisted counts are always 0. Date filtering uses Applicant.created_at.
+Notes: Entry routes — `career_page`/`bulk_upload`/`scheduled`/`direct_link`/`ats` count applicants by `ApplicantSource`; `other` = `total_applicants` − (those five), so the six route counts reconcile exactly to `total_applicants` (`other` absorbs the unlisted `functional`/NULL sources). Funnel — the reached flags mirror the dashboard's stage derivation (api.js mapApplicantOutToCandidate) and are monotonic by construction: `functional_reached` = functional_status not null OR decision=="hired"; `screening_reached` = functional_reached OR screening_status not null OR decision=="shortlisted"; `resume_reached` = screening_reached OR resume_analysed; hence `total_applicants ≥ resume_reached ≥ screening_reached ≥ functional_reached`. `screening_attempted`/`functional_attempted` count only interviews whose InterviewStatus .value == "completed"; `screening_scheduled`/`functional_scheduled` count .value == "scheduled". `screening_shortlisted` = candidates who advanced past screening (equals `functional_reached`); `functional_shortlisted` = candidates with `decision == "hired"`. `resume_analysed`/`resume_shortlisted`/`resume_waitlisted` count the respective applicant boolean columns. Date filtering uses Applicant.created_at.
 
 #### GET /api/usage/jobs-table
 

@@ -5,7 +5,7 @@
 
 import { document } from './runtime.js';
 import { AppState } from './state.js';
-import { renderJobCards, renderTeamTable, updateJobsCounters, updateSummaryMetrics } from './render-views.js';
+import { renderJobCards, renderTeamTable, updateJobsCounters } from './render-views.js';
 import { showPremiumToast } from './sourcing.js';
 import { isApiMode, apiLogin, apiFetchJobs, apiListTeam } from './api.js';
 
@@ -16,7 +16,15 @@ export async function bootstrapApiData() {
   } catch (e) {
     const msg = (e && e.message) || '';
     if (/401|not authenticated|unauthor|credential/i.test(msg)) showLoginOverlay();
-    else showPremiumToast(`Live backend unreachable: ${msg}`, 'error');
+    else {
+      // Backend is down, not an auth issue: drop the unhydrated demo seed and
+      // resolve the jobs skeleton to the existing "No jobs found" empty state
+      // instead of leaving it shimmering (or flashing the demo jobs).
+      AppState.jobs = [];
+      AppState.jobsHydrated = true;
+      try { renderJobCards(); } catch {}
+      showPremiumToast(`Live backend unreachable: ${msg}`, 'error');
+    }
   }
   // Team is non-critical to the jobs view — hydrate it best-effort so a failure
   // here never blocks the dashboard or triggers the login overlay twice.
@@ -36,9 +44,11 @@ async function hydrateTeam() {
 async function hydrateJobs() {
   const jobs = await apiFetchJobs();
   AppState.jobs = jobs;
+  AppState.jobsHydrated = true;
   renderJobCards();
   try { updateJobsCounters(); } catch {}
-  try { updateSummaryMetrics(); } catch {}
+  // Usage cards are owned by /usage/stats (hydrateUsageAnalytics); do NOT derive
+  // them from AppState here — in API mode that wrote demo-candidate numbers.
   showPremiumToast(`Loaded ${jobs.length} job${jobs.length !== 1 ? 's' : ''} from the live backend.`, 'success');
 
   if (typeof window !== 'undefined' && window.__ihDashboardMounted) {

@@ -73,6 +73,35 @@
 .m-pill .v { font-family: var(--font-mono); font-weight: 600; color: var(--color-text-primary); }
 
 /* ============================================================
+   USAGE OVERVIEW LOADING STATE (while /usage/stats is in flight —
+   set by setUsageLoading(), cleared by applyUsageStats())
+   ============================================================ */
+.metrics-grid.is-loading .card-metric { animation: ih-metric-pulse 1.4s ease-in-out infinite; }
+.metrics-grid.is-loading .metric-val,
+.metrics-grid.is-loading .m-pill .v { color: var(--color-text-faint); }
+.table-skel-row td { padding: 12px 24px; }
+.table-skel-bar {
+  display: block;
+  height: 14px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.09), rgba(255,255,255,0.04));
+  background-size: 200% 100%;
+  animation: ih-skel-sweep 1.4s ease-in-out infinite;
+}
+@keyframes ih-metric-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@keyframes ih-skel-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .metrics-grid.is-loading .card-metric,
+  .table-skel-bar { animation: none; }
+}
+
+/* ============================================================
    TABLE STYLES
    ============================================================ */
 .table-card { padding: 0; overflow: visible; }
