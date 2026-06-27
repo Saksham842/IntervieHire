@@ -46,6 +46,13 @@ services:
       # site's /interview panel (must be where the candidate room is served).
       - key: INTERVIEW_ROOM_URL
         value: https://interviehire.com
+      # Per-candidate interview invite links (/i/{token}). The backend serves the
+      # /i/{token} gate, so this must be the backend's own public origin (NOT a
+      # front-end), else emailed/copied links point nowhere.
+      - key: INVITE_LINK_BASE
+        value: https://interviehire-backend.onrender.com
+      - key: INVITE_FROM_EMAIL
+        value: interviews@interviehire.com
       # Email for calendar invites (Gmail SMTP is free via an App Password).
       - key: SMTP_HOST
         value: smtp.gmail.com
