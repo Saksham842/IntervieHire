@@ -12,8 +12,22 @@ const BACKEND_API_PREFIXES = [
   'talent-finder',
 ];
 
+// The interview room lives on the `interview.interviehire.com` subdomain, but
+// invite emails (built from the backend's INTERVIEW_ROOM_URL) can point at the
+// apex `interviehire.com/interviewcandidateroom`, which this dashboard serves and
+// has no such route → 404. Forward those to the room subdomain, preserving the
+// ?sessionId query (Next carries query params through on redirects).
+const ROOM_ORIGIN = 'https://interview.interviehire.com';
+
 const nextConfig = {
   serverExternalPackages: ['@napi-rs/canvas'],
+  async redirects() {
+    return [
+      { source: '/interviewcandidateroom', destination: `${ROOM_ORIGIN}/interviewcandidateroom`, permanent: false },
+      { source: '/interviewcandidateroom/:path*', destination: `${ROOM_ORIGIN}/interviewcandidateroom/:path*`, permanent: false },
+      { source: '/interview', destination: `${ROOM_ORIGIN}/interviewcandidateroom`, permanent: false },
+    ];
+  },
   async rewrites() {
     if (!backendOrigin) return [];
     // Note: /api/deepseek, /api/parse-file and /api/fetch-doc are this app's own
