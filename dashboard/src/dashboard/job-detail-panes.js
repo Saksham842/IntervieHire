@@ -18,7 +18,7 @@ import { soundEngine } from './sound.js';
 import { showPremiumToast } from './sourcing.js';
 import { AppState } from './state.js';
 import { activeCandidateSubTabs } from './vetting-data.js';
-import { getDataSource, apiScheduleCandidate, apiUpdateApplicant, apiMoveApplicantStage, ensureBackendApplicantId } from './api.js';
+import { getDataSource, apiScheduleCandidate, apiUpdateApplicant, apiMoveApplicantStage, ensureBackendApplicantId, apiCreateInterviewInvite, apiSendInterviewInvite, apiListInterviewInvites, apiBulkInterviewInvites } from './api.js';
 
 function renderJobDetailPanes(job) {
   const searchVal = document.getElementById('jd-candidate-search').value.trim().toLowerCase();
@@ -224,11 +224,12 @@ function renderJobDetailPanes(job) {
                 <th>Report</th>
                 <th>Source</th>
                 <th>Attempted <span class="sort-arrows">⇅</span></th>
+                <th>Invite <span class="sort-arrows invite-sort" data-stage="screening" style="cursor:pointer;" title="Sort by interview link status">⇅</span></th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${displayScreeningCands.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--color-text-faint);">No candidates match the current filters. Try resetting or adjusting them.</td></tr>' : ''}
+              ${displayScreeningCands.length === 0 ? '<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--color-text-faint);">No candidates match the current filters. Try resetting or adjusting them.</td></tr>' : ''}
               ${displayScreeningCands.map(c => {
                 const initials = c.name.split(' ').map(n=>n[0]).join('').slice(0, 2).toUpperCase();
                 const hasReport = c.interviewStatus === 'Incomplete' || c.interviewStatus === 'Completed';
@@ -251,7 +252,8 @@ function renderJobDetailPanes(job) {
                     <td>${hasReport ? `<a href="#" class="report-link" data-cand-id="${c.id}">Report <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '—'}</td>
                     <td><span class="source-badge">${sourceLabel(c.entryMethod)}</span></td>
                     <td>${c.attemptedAt || '—'}</td>
-                    <td><button class="${actionClass}" data-candidate-id="${c.id}">${c.interviewStatus === 'Slot Missed' ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg> ' : '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line></svg> '}${actionLabel}</button></td>
+                    <td class="invite-cell"><span class="invite-status-pill" data-candidate-id="${c.id}"></span></td>
+                    <td><button class="${actionClass}" data-candidate-id="${c.id}">${c.interviewStatus === 'Slot Missed' ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg> ' : '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line></svg> '}${actionLabel}</button> <button class="btn-gen-invite" data-candidate-id="${c.id}" title="Generate &amp; copy a unique interview link"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Link</button></td>
                   </tr>
                 `;
               }).join('')}
@@ -338,11 +340,12 @@ function renderJobDetailPanes(job) {
                 <th>Cheat <span class="sort-arrows">⇅</span></th>
                 <th>Source</th>
                 <th>Screening</th>
+                <th>Invite <span class="sort-arrows invite-sort" data-stage="functional" style="cursor:pointer;" title="Sort by interview link status">⇅</span></th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${displayFunctionalCands.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--color-text-faint);">No candidates match the current filters. Try resetting or adjusting them.</td></tr>' : ''}
+              ${displayFunctionalCands.length === 0 ? '<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--color-text-faint);">No candidates match the current filters. Try resetting or adjusting them.</td></tr>' : ''}
               ${displayFunctionalCands.map(c => {
                 const initials = c.name.split(' ').map(n=>n[0]).join('').slice(0, 2).toUpperCase();
                 return `
@@ -362,6 +365,7 @@ function renderJobDetailPanes(job) {
                     <td><span class="cheat-prob-badge ${cheatColor(c.cheatProbability)}">${c.cheatProbability ? '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg> ' + c.cheatProbability : '—'}</span></td>
                     <td><span class="source-badge">${sourceLabel(c.entryMethod)}</span></td>
                     <td>${screeningBadge(c.recruiterScreening)}</td>
+                    <td class="invite-cell"><span class="invite-status-pill" data-candidate-id="${c.id}"></span></td>
                     <td>
                       <select class="action-select-status" data-cand-id="${c.id}">
                         <option value="">Select Sta...</option>
@@ -369,6 +373,7 @@ function renderJobDetailPanes(job) {
                         <option value="reject">Reject</option>
                         <option value="hold">Hold</option>
                       </select>
+                      <button class="btn-gen-invite" data-candidate-id="${c.id}" title="Generate &amp; copy a unique interview link"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Link</button>
                     </td>
                   </tr>
                 `;
@@ -544,6 +549,7 @@ function renderJobDetailPanes(job) {
             <button class="bulk-dd-item" data-action="advance"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg> Advance</button>
             <button class="bulk-dd-item" data-action="reject"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Reject</button>
             <button class="bulk-dd-item" data-action="schedule"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line></svg> Schedule</button>
+            <button class="bulk-dd-item" data-action="invite"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Send Interview Links</button>
             <button class="bulk-dd-item" data-action="reschedule"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg> Reschedule</button>
             <button class="bulk-dd-item" data-action="export"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Export</button>`;
         }
@@ -559,6 +565,27 @@ function renderJobDetailPanes(job) {
             return;
           }
           const label = names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} +${names.length - 2} more`;
+          if (action === 'invite') {
+            dd.remove();
+            if (getDataSource() !== 'api') { showPremiumToast('Connect the live backend to send interview links.', 'info'); return; }
+            showPremiumToast(`Generating interview links for ${ids.length} candidate(s)…`, 'info');
+            try {
+              const cands = ids.map(cid => AppState.candidates.find(c => c.id === cid)).filter(Boolean);
+              const backendIds = [];
+              for (const c of cands) {
+                try { backendIds.push(await ensureBackendApplicantId(c, job.id)); } catch { /* skip unresolved */ }
+              }
+              if (backendIds.length === 0) { showPremiumToast('Could not resolve any selected candidates in the backend.', 'error'); return; }
+              const res = await apiBulkInterviewInvites(backendIds, { send: true });
+              const okCount = res?.count || 0;
+              const failed = (res?.errors || []).length;
+              renderJobDetailPanes(job);
+              showPremiumToast(`Sent ${okCount} interview link(s)${failed ? `, ${failed} skipped` : ''}.`, failed ? 'info' : 'success');
+            } catch (err) {
+              showPremiumToast(`Failed to send interview links: ${err.message || err}`, 'error');
+            }
+            return;
+          }
           if (action === 'analyse') {
             dd.remove();
             showPremiumToast(`Analysing ${ids.length} candidate(s)...`, 'info');
@@ -740,6 +767,100 @@ function renderJobDetailPanes(job) {
             }
           }
         );
+      });
+    });
+
+    pane.querySelectorAll('.btn-gen-invite').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        soundEngine.playClick();
+        const candId = btn.getAttribute('data-candidate-id');
+        const cand = AppState.candidates.find(c => c.id === candId);
+        if (!cand) return;
+
+        if (getDataSource() !== 'api') {
+          showPremiumToast('Connect the live backend to generate interview links.', 'info');
+          return;
+        }
+
+        const stage = cand.status?.toLowerCase() === 'screening' ? 'screening' : 'functional';
+        btn.disabled = true;
+        showPremiumToast(`Generating interview link for ${cand.name}…`, 'info');
+        try {
+          const scheduleId = await ensureBackendApplicantId(cand, job.id);
+          const data = await apiCreateInterviewInvite(scheduleId, { stage, send: false });
+          const link = data?.link;
+          if (!link) throw new Error('No link returned by the server');
+
+          let copied = false;
+          try { await navigator.clipboard.writeText(link); copied = true; } catch { /* clipboard blocked */ }
+
+          showPremiumToast(
+            copied ? `Unique link copied for ${cand.name}.` : `Link ready for ${cand.name}.`,
+            'success',
+            {
+              label: `Email it to ${cand.email || 'candidate'}`,
+              onClick: async () => {
+                showPremiumToast(`Sending invite to ${cand.email}…`, 'info');
+                try {
+                  await apiSendInterviewInvite(data.token);
+                  showPremiumToast(`Invite emailed to ${cand.email}.`, 'success');
+                } catch (err) {
+                  showPremiumToast(`Failed to send invite: ${err.message || err}`, 'error');
+                }
+              },
+            }
+          );
+        } catch (err) {
+          showPremiumToast(`Failed to generate link: ${err.message || err}`, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // Populate per-candidate invite status pills with one job-level fetch.
+    (async () => {
+      if (getDataSource() !== 'api' || !job?._backend) return;
+      let data;
+      try { data = await apiListInterviewInvites({ jobId: job.id }); } catch { return; }
+      const latest = new Map();
+      for (const inv of (data?.invites || [])) {
+        if (inv.applicant_id && !latest.has(inv.applicant_id)) latest.set(inv.applicant_id, inv.status);
+      }
+      const STYLES = {
+        pending:   ['Invite sent', 'rgba(99,102,241,0.12)', '#6366f1'],
+        started:   ['In progress', 'rgba(245,158,11,0.16)', '#b45309'],
+        completed: ['Completed',   'rgba(16,185,129,0.16)', '#059669'],
+        expired:   ['Expired',     'rgba(148,163,184,0.20)', '#64748b'],
+      };
+      pane.querySelectorAll('.invite-status-pill').forEach(el => {
+        const st = latest.get(el.getAttribute('data-candidate-id'));
+        const s = st && STYLES[st];
+        if (!s) { el.textContent = ''; el.removeAttribute('style'); return; }
+        el.textContent = s[0];
+        el.title = `Interview invite: ${st}`;
+        el.style.cssText = `display:inline-block;margin-left:6px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:${s[1]};color:${s[2]};vertical-align:middle;`;
+      });
+    })();
+
+    // Click the Invite column header to sort rows by interview-link status.
+    pane.querySelectorAll('.invite-sort').forEach(arrow => {
+      arrow.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tbody = arrow.closest('table')?.querySelector('tbody');
+        if (!tbody) return;
+        const rank = { 'Completed': 4, 'In progress': 3, 'Invite sent': 2, 'Expired': 1 };
+        const dir = arrow.getAttribute('data-dir') === 'asc' ? -1 : 1;
+        arrow.setAttribute('data-dir', dir === 1 ? 'asc' : 'desc');
+        Array.from(tbody.querySelectorAll('tr'))
+          .filter(r => r.querySelector('.invite-status-pill'))
+          .sort((a, b) => {
+            const av = rank[a.querySelector('.invite-status-pill')?.textContent?.trim()] || 0;
+            const bv = rank[b.querySelector('.invite-status-pill')?.textContent?.trim()] || 0;
+            return (av - bv) * dir;
+          })
+          .forEach(r => tbody.appendChild(r));
       });
     });
 

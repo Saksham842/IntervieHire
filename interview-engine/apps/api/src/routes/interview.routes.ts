@@ -9,6 +9,18 @@ import { processRecordingForSession, transcribeUploadedFile } from '../services/
 import { handleCandidateTranscript } from '../services/interview-conversation.service.js';
 import { ensureTranscriptMeta, finalizeTranscript } from '../services/transcript.service.js';
 
+// Per-candidate invite enforcement shared by the post-start session routes: a
+// session bound to an inviteToken only serves the matching ?token=. Returns true
+// (and sends a 403) when blocked, false otherwise. Token-free sessions pass.
+async function blockedByInviteToken(req: any, reply: any): Promise<boolean> {
+  const bound = await prisma.interviewSession.findUnique({ where: { id: req.params.id }, select: { inviteToken: true } });
+  if (bound?.inviteToken && req.query.token !== bound.inviteToken) {
+    reply.code(403).send({ error: 'This interview link is invalid or has expired.', code: 'INVALID_TOKEN' });
+    return true;
+  }
+  return false;
+}
+
 type SpeechTranscriptSegment = {
   speaker: 'candidate';
   text: string;
@@ -231,12 +243,24 @@ export async function interviewRoutes(app: FastifyInstance) {
     return { sessionId: session.id, companyId: company.id, roleId: role.id, candidateId: candidate.id };
   });
 
-  app.get('/sessions/:id', async (req:any) => prisma.interviewSession.findUnique({where:{id:req.params.id}, include:{company:true,candidate:true,jobRole:{include:{questions:true}},proctoringLogs:true}}));
+  app.get('/sessions/:id', async (req:any, reply:any) => {
+    const session = await prisma.interviewSession.findUnique({where:{id:req.params.id}, include:{company:true,candidate:true,jobRole:{include:{questions:true}},proctoringLogs:true}});
+    // A token-bound session only reveals its config/questions to the matching token.
+    if (session && (session as any).inviteToken && req.query.token !== (session as any).inviteToken) {
+      return reply.code(403).send({ error: 'This interview link is invalid or has expired.', code: 'INVALID_TOKEN' });
+    }
+    return session;
+  });
   app.post('/sessions/:id/start', async (req:any, reply:any) => {
     const session = await prisma.interviewSession.findUniqueOrThrow({
       where: { id: req.params.id },
       include: { candidate: true, jobRole: { include: { questions: { where: { isActive: true }, orderBy: { createdAt: 'asc' } } } } },
     });
+    // Per-candidate invite enforcement: a token-bound session only starts for the
+    // matching token. Token-free (legacy/scheduled/demo) sessions are unaffected.
+    if ((session as any).inviteToken && req.query.token !== (session as any).inviteToken) {
+      return reply.code(403).send({ error: 'This interview link is invalid or has expired.', code: 'INVALID_TOKEN' });
+    }
     // Per-job interview settings synced from the recruiter dashboard. A missing
     // value is treated as permissive so existing sessions keep working.
     const s: any = session.settings || {};
@@ -288,7 +312,8 @@ export async function interviewRoutes(app: FastifyInstance) {
     const session = await prisma.interviewSession.findUniqueOrThrow({where:{id:req.params.id}, include:{company:true,jobRole:{include:{questions:true}}}});
     return buildVapiAssistantConfig({companyName:session.company.name, companyDescription:session.company.description || undefined, jobRole:session.jobRole.title, roleRequirements:session.jobRole.requirements, questions:session.jobRole.questions.map((q: { text: string })=>q.text), evaluationCriteria:session.jobRole.evaluationCriteria as any});
   });
-  app.post('/sessions/:id/complete', async (req:any) => {
+  app.post('/sessions/:id/complete', async (req:any, reply:any) => {
+    if (await blockedByInviteToken(req, reply)) return reply;
     const session = await prisma.interviewSession.update({ where: { id: req.params.id }, data: { status: 'COMPLETED', completedAt: new Date() } });
     // Auto-finalize the transcript on completion. Best-effort: a failure here
     // must not break the completion flow (the .txt can still be built on demand
@@ -300,6 +325,7 @@ export async function interviewRoutes(app: FastifyInstance) {
     return { session, transcript };
   });
   app.post('/sessions/:id/answers', async (req:any, reply) => {
+    if (await blockedByInviteToken(req, reply)) return reply;
     const text = String(req.body?.text ?? '').trim();
     if (!text) return reply.code(400).send({ error: 'Answer text is required' });
 
@@ -357,7 +383,10 @@ export async function interviewRoutes(app: FastifyInstance) {
     return { ok: true, turns: normalized.length, transcript: normalized };
   });
 
-  app.post('/sessions/:id/evaluate', async (req:any) => ({evaluation: await evaluateInterview(req.params.id)}));
+  app.post('/sessions/:id/evaluate', async (req:any, reply:any) => {
+    if (await blockedByInviteToken(req, reply)) return reply;
+    return { evaluation: await evaluateInterview(req.params.id) };
+  });
   app.get('/sessions/:id/candidate-report', async (req:any) => ({report: await getCandidateFacingReport(req.params.id)}));
   app.post('/sessions/:id/report', async (req:any) => ({filePath: await generatePdfReport(req.params.id)}));
   app.post('/sessions/:id/email-report', async (req:any) => {

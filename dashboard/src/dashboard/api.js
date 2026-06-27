@@ -204,6 +204,43 @@ export async function apiScheduleCandidate(applicantId, scheduledAt, stage = 'sc
   return mapApplicantOutToCandidate(data);
 }
 
+// Mint a unique, unguessable per-candidate interview link bound to this applicant
+// (and optionally email it). Returns the raw backend payload
+// ({ token, link, status, expires_at, sent, ... }) — not mapped to a candidate,
+// since the link/token are what the caller needs to copy or send.
+export async function apiCreateInterviewInvite(applicantId, { stage, send = false } = {}) {
+  return request(`/invites`, {
+    method: 'POST',
+    body: { applicant_id: applicantId, stage, send },
+  });
+}
+
+// Email an already-minted invite (by token) to its candidate. Reuses the SAME
+// link, so it never re-mints/invalidates a link the recruiter already copied.
+export async function apiSendInterviewInvite(token) {
+  return request(`/invites/${token}/send`, { method: 'POST' });
+}
+
+// List interview invites + statuses for one candidate ({ applicantId }) or a
+// whole job ({ jobId }) so the UI can show link status without re-minting.
+export async function apiListInterviewInvites({ applicantId, jobId } = {}) {
+  const qs = applicantId
+    ? `applicant_id=${encodeURIComponent(applicantId)}`
+    : jobId
+    ? `job_id=${encodeURIComponent(jobId)}`
+    : '';
+  return request(`/invites?${qs}`);
+}
+
+// Bulk-mint per-applicant invites (e.g. "invite all shortlisted") and optionally
+// email them. Returns { invited: [...], errors: [...], count }.
+export async function apiBulkInterviewInvites(applicantIds, { stage, send = true } = {}) {
+  return request(`/invites/applicants`, {
+    method: 'POST',
+    body: { applicant_ids: applicantIds, stage, send },
+  });
+}
+
 // Persist a partial applicant update (resume score/report, shortlist flag, etc.)
 // to the backend. `patch` keys are backend snake_case (ApplicantUpdateIn). The
 // route ignores unset fields, so send only what changed. Returns the mapped row.

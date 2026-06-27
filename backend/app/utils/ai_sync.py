@@ -224,6 +224,9 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
             session.completedAt = None
             session.websocketId = None
             session.ueSocketId = None
+            # Clear any prior invite binding on (re)provision so the latest invite
+            # wins and a later plain schedule re-opens the session token-free.
+            session.inviteToken = None
             session.scheduledAt = scheduled_at
             session.settings = interview_settings
             db.commit()

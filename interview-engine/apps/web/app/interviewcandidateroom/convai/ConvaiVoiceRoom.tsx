@@ -44,6 +44,8 @@ function speakQuestion(text: string) {
 export default function ConvaiVoiceRoom() {
   const params = useSearchParams();
   const sessionId = params.get('sessionId') || params.get('session') || '';
+  // Per-candidate invite token from the link — forwarded to the token-enforced /start.
+  const inviteToken = params.get('ih_invite') || params.get('token') || '';
 
   const convaiRef = useRef<any>(null);
   const [convaiReady, setConvaiReady] = useState(false);
@@ -119,7 +121,8 @@ export default function ConvaiVoiceRoom() {
     setBusy(true);
     setStatus('Starting session…');
     try {
-      const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start`, { method: 'POST' });
+      const startTokenQS = inviteToken ? `?token=${encodeURIComponent(inviteToken)}` : '';
+      const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start${startTokenQS}`, { method: 'POST' });
       const json = await parseApiResponse<any>(res);
       transcript.markStart();
       const first = json?.initialQuestion;
@@ -155,7 +158,7 @@ export default function ConvaiVoiceRoom() {
     transcript.recordEvent({ speaker: 'candidate', text: answer, source: 'convai', isFinal: true });
     setDraft('');
     try {
-      const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/answers`, {
+      const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/answers${inviteToken ? `?token=${encodeURIComponent(inviteToken)}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: answer, metrics: {} }),
@@ -183,8 +186,9 @@ export default function ConvaiVoiceRoom() {
       // Finalize the transcript (.txt) before completing/evaluating.
       const fin = await transcript.finalize();
       if (fin?.status === 'finalized' || fin?.status === 'empty') setTranscriptReady(true);
-      await fetch(`${API_URL}/api/interview/sessions/${sessionId}/complete`, { method: 'POST' });
-      const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/evaluate`, { method: 'POST' });
+      const tk = inviteToken ? `?token=${encodeURIComponent(inviteToken)}` : '';
+      await fetch(`${API_URL}/api/interview/sessions/${sessionId}/complete${tk}`, { method: 'POST' });
+      const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/evaluate${tk}`, { method: 'POST' });
       const json = await parseApiResponse<any>(res);
       if (json?.evaluation) setEvaluation(json.evaluation);
       setStatus('Interview completed and evaluated.');

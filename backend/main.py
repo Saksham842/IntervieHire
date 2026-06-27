@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.websocket_routes import router as websocket_router
 from app.database import Base, engine
-from app.routers import jobs, team, organisation, usage, settings as settings_router, deepseek, auth, public, leaderboard
+from app.routers import jobs, team, organisation, usage, settings as settings_router, deepseek, auth, public, leaderboard, invites
 from app.talent_finder.routes import router as talent_finder_router
 
 # Import all models so SQLAlchemy registers them before create_all
@@ -54,6 +54,7 @@ def init_db():
         conn.execute(text("""ALTER TABLE "InterviewSession" ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}';"""))
         conn.execute(text("ALTER TABLE organisations ADD COLUMN IF NOT EXISTS career_subdomain VARCHAR;"))
         conn.execute(text("ALTER TABLE organisations ADD COLUMN IF NOT EXISTS career_intro TEXT;"))
+        conn.execute(text('ALTER TABLE "InterviewSession" ADD COLUMN IF NOT EXISTS "inviteToken" VARCHAR;'))
         conn.commit()
 
         # Add 'super_admin' to usertype enum in postgresql
@@ -136,6 +137,8 @@ app.include_router(deepseek.router,         prefix="/api/deepseek", tags=["DeepS
 app.include_router(public.router,           prefix="/api/public",   tags=["Public"])
 app.include_router(leaderboard.router,      prefix="/api/leaderboard", tags=["Leaderboard"])
 app.include_router(talent_finder_router,    prefix="/api/talent-finder", tags=["Talent Finder"])
+app.include_router(invites.router,          prefix="/api/invites", tags=["Invites"])
+app.include_router(invites.public_link_router, tags=["Invites"])  # public GET /i/{token}
 
 
 @app.get("/")

@@ -18,6 +18,19 @@ export async function registerWebsocket(app: FastifyInstance) {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'register') {
+          // Per-candidate invite enforcement: a session bound to an inviteToken
+          // only admits a candidate presenting the matching token. The trusted
+          // UE5 avatar (server infra) and token-free sessions are unaffected. Fail
+          // open on a DB hiccup so a transient error never blocks a real interview.
+          if (msg.role !== 'ue5') {
+            try {
+              const s = await prisma.interviewSession.findUnique({ where: { id: msg.sessionId }, select: { inviteToken: true } });
+              if (s?.inviteToken && msg.token !== s.inviteToken) {
+                send(socket, {type:'error', code:'INVALID_TOKEN', message:'This interview link is invalid or has expired.'});
+                return;
+              }
+            } catch { /* fail open: never block on a transient lookup error */ }
+          }
           (msg.role === 'ue5' ? ueClients : candidates).set(msg.sessionId, socket);
           send(socket, {type:'registered', role: msg.role, sessionId: msg.sessionId});
           return;

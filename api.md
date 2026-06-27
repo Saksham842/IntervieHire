@@ -6,6 +6,10 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-06-28** — Self-serve expired-link re-request + auto-revoke on rejection (round 4). **Backend** (`backend/app/routers/invites.py`): added **POST /i/{token}/request-new** (PUBLIC — no auth; mounted at root via `public_link_router`, NOT under `/api`) — a candidate whose link has expired requests a fresh one, emailed to the SAME address. Rate-limited per client IP (5 requests / 300 s → 429). Behavior: invite not found → 404 (text/html); `status == completed` → 410 (text/html, "a new link can't be issued"); otherwise mints a fresh invite for the same candidate (applicant-bound → re-provisions via the shared `_provision_invite_for_applicant` incl. stage provisioning, engine-session sync, and token binding; standalone → `create_invite`) and EMAILS it; internal failure → 500 (text/html); success → 200 (text/html confirmation page, "We've emailed a fresh interview link to j***@domain…"). All responses are text/html. Modified **GET /i/{token}** — the 410 EXPIRED error page now renders an "Email me a new link" button that POSTs to `/i/{token}/request-new`; the COMPLETED 410 page does NOT (completed interviews can't be re-issued). Request/response otherwise unchanged. **Backend** (`backend/app/routers/jobs.py`): **PATCH /api/jobs/applicants/{applicant_id}** — when the update sets the applicant's `decision == "rejected"`, it now AUTO-REVOKES that candidate's live interview links: all pending/started `interview_invites` rows are set to expired, AND the engine's `InterviewSession.inviteToken` is rotated to a fresh, never-shared value so any saved room URL stops working. Request/response schema is otherwise UNCHANGED.
+- **2026-06-27** — Bulk per-applicant invites + job-scoped listing + post-start token enforcement (round 3). **Backend** (`backend/app/routers/invites.py`): added **POST /api/invites/applicants** (auth — bulk-mint per-applicant invites, e.g. "invite all shortlisted"; reuses the same per-applicant provisioning as POST /api/invites via the shared `_provision_invite_for_applicant` helper — stage provisioning, engine session sync, token binding, optional email; per-applicant failures (test applicant, no email, invalid id, access denied) are collected in `errors` instead of aborting the batch). Modified **GET /api/invites** — now accepts EITHER `applicant_id` OR `job_id` query param (exactly one required; was applicant_id-only); with `job_id` it returns all invites for that job (auth via `_verify_job_access`), and each `invites[]` row now also includes `"applicant_id": string|null`. 400 if neither param is supplied (or an invalid UUID). **Interview Engine** (Fastify `interview.routes.ts`): the post-start session routes — **POST /api/interview/sessions/:id/answers**, **POST /api/interview/sessions/:id/complete**, **POST /api/interview/sessions/:id/evaluate** — now enforce the per-candidate invite token (defense-in-depth on the post-start path via the shared `blockedByInviteToken` helper): each accepts an optional `token` query param and returns 403 `{ "error": "This interview link is invalid or has expired.", "code": "INVALID_TOKEN" }` when the session has a non-null `inviteToken` and `token` doesn't match; token-free sessions are unaffected and request/response bodies are otherwise unchanged.
+- **2026-06-27** — Interview-invite robustness/hardening + full token enforcement (round 2). **Backend** (`backend/app/routers/invites.py`): added **GET /api/invites** (auth — list a candidate's invites + statuses; `applicant_id` query param required) and **POST /api/invites/{token}/revoke** (auth — immediately kill a link, sets status=expired; no-op if already completed). Modified **POST /api/invites** — now rejects test applicants (400 "Cannot create an interview invite for a test applicant.") and applicants with no email (400 "This applicant has no email address to send an invite to."), supersedes any prior PENDING invite for the same applicant+stage (sets them expired) so only one active link exists, and binds the minted token onto the shared `InterviewSession.inviteToken` so the engine enforces it (request/response schema unchanged). Added basic in-memory per-IP fixed-window rate limiting to the PUBLIC token endpoints — **GET /i/{token}** = 30/min, **GET /api/invites/{token}** = 60/min; exceeding returns 429 "Too many requests. Please slow down and try again shortly." **Interview Engine** (Fastify): GET /api/interview/sessions/:id and POST /api/interview/sessions/:id/start (`interview.routes.ts`) now accept an optional `token` query param — when the session has a non-null `inviteToken` and `token` doesn't match → 403 `{ "error": "This interview link is invalid or has expired.", "code": "INVALID_TOKEN" }`; token-free sessions unaffected. WebSocket /ws (`gateway.ts`) `register` message now accepts an optional `token` field — for role !== 'ue5', a token-bound session whose token doesn't match gets `{ type:'error', code:'INVALID_TOKEN', message:'This interview link is invalid or has expired.' }` and the socket is NOT registered; role 'ue5' (avatar) and token-free sessions unaffected. **Schema/DB:** `InterviewSession` gained a nullable `inviteToken` column (shared Postgres) — added to the Prisma schema (`interview-engine/apps/api/prisma/schema.prisma`) with migration `interview-engine/apps/api/prisma/migrations/20260627000000_add_invite_token/migration.sql`, mirrored in the backend SQLAlchemy model (`backend/app/models/ai_integration.py`) + backend `init_db()` ALTER. The backend writes it when an invite is minted; `sync_applicant_to_ai` clears it on (re)provision so the plain scheduled/demo path is never blocked.
+- **2026-06-27** — Added interview-invite endpoints (`backend/app/routers/invites.py`, mounted in `main.py` at `/api/invites` plus the public root link router). New routes: POST /api/invites (auth — mint/optionally email a unique per-candidate link bound to an applicant), POST /api/invites/bulk (auth — batch-mint standalone invites not bound to an applicant), POST /api/invites/{token}/send (auth — re-email an already-minted invite, reusing the same link), GET /api/invites/{token} (public — read-only token→session/status resolution), and GET /i/{token} (public candidate-facing link — validates the single-use lifecycle and 302-redirects into the interview room). Modified: POST /api/jobs/webhooks/interview-completed now ALSO marks the applicant's most-recent non-completed `interview_invites` row status=completed + completed_at in the same transaction (request/response schema unchanged). New config/env (`backend/app/config.py`): INVITE_LINK_BASE (default "http://localhost:8000"), INVITE_FROM_EMAIL (default "interviews@interviehire.com"), INVITE_TTL_DAYS (default 7). New table `interview_invites` (id uuid PK, token unique, applicant_id uuid FK nullable, job_id uuid FK nullable, candidate_email, candidate_name, role, stage, status enum[pending|started|completed|expired], created_at, expires_at, started_at, completed_at).
 - **2026-06-27** — Added public no-auth endpoint `GET /api/public/careers/{subdomain}` — returns an organisation's public career page (the org's `org_name`/`logo_url`/`career_intro`/`career_subdomain`, plus its jobs), filtering jobs to that org AND `is_job_listed == true` AND `status == published`; 404 "Career page not found" when no org has that `career_subdomain`. Also added `career_subdomain` and `career_intro` (both nullable string) to the organisation schema — `OrganisationOut` (response of `GET`/`PUT`/`POST /api/organisation`) and `OrganisationIn` (optional request fields on `PUT`/`POST /api/organisation`, persisted via the existing upsert).
 - **2026-06-27** — Modified the `UsageStatsOut` response schema of `GET /api/usage/stats` (request/auth unchanged). ADDED fields: `ats`, `other`, `resume_reached`, `screening_reached`, `functional_reached`. REMOVED fields: `screening_waitlisted`, `functional_waitlisted`. The six entry-route counts (`career_page`/`bulk_upload`/`scheduled`/`direct_link`/`ats`/`other`) now reconcile exactly to `total_applicants` (`other` absorbs the `functional`/NULL sources), and the headline stage counts form a monotonic funnel `total_applicants ≥ resume_reached ≥ screening_reached ≥ functional_reached` (`screening_attempted`/`functional_attempted` now count only **completed** interviews; `screening_shortlisted` = advanced past screening = `functional_reached`; `functional_shortlisted` = `decision == "hired"`).
 - **2026-06-26** — Added `entry_method` (nullable string recording **how** a candidate was added — `bulk_upload` | `ats` | `direct_link` | `career_page`; **independent** of `source`, which is the `ApplicantSource` enum that routes the applicant to a pipeline stage) to `AddApplicantIn` and `ApplicantOut`. Affected routes: `POST /api/jobs/{job_id}/applicants` (request body + response gain optional `entry_method`; client may send it), `POST /api/jobs/{job_id}/applicants/bulk` (each `BulkApplicantsIn.applicants[]` item inherits `entry_method` from `AddApplicantIn`, and each response item carries it), and `GET /api/jobs/{job_id}/responses` (serialized applicant objects now include `entry_method`). `POST /api/jobs/{job_id}/applicants/upload-resumes` server-sets `entry_method="bulk_upload"` on every applicant it creates (no client override on that route). DB migration: `init_db()` now runs the idempotent `ALTER TABLE applicants ADD COLUMN IF NOT EXISTS entry_method VARCHAR;`.
@@ -762,7 +766,7 @@ Response:
 
 Status codes: 200 OK; 401 not authenticated; 403 'Access denied'; 404 'Applicant not found' / 'Job not found'; 422 body validation error.
 
-Notes: response_model=ApplicantOut. If screening_status or functional_status provided and truthy: regenerates scheduling_token (uuid4) and calls sync_applicant_to_ai. Broadcasts WebSocket update.
+Notes: response_model=ApplicantOut. If screening_status or functional_status provided and truthy: regenerates scheduling_token (uuid4) and calls sync_applicant_to_ai. Broadcasts WebSocket update. **(2026-06-28)** When the update sets `decision == "rejected"`, auto-revokes the candidate's live interview links: all pending/started `interview_invites` rows are set to expired, and the engine `InterviewSession.inviteToken` is rotated to a fresh, never-shared value so any saved room URL stops working (request/response schema unchanged).
 
 #### POST /api/jobs/applicants/{applicant_id}/schedule
 
@@ -946,7 +950,7 @@ Response:
 
 Status codes: 200 OK; 400 'sessionId is required' / 'Invalid UUID format for sessionId'; 401 'Invalid webhook secret'; 404 'Applicant not found' / 'Interview session not found'; 422 missing X-Webhook-Secret header / missing body.
 
-Notes: Plain dict response. No get_current_user dependency. proctoring_severity_flag derived from ProctoringLog.severity (critical/high/medium/low); cheat_probability mapped from flag (critical|high→high, medium→medium, else low). overall_interview_score=functional_score=evaluation.overallScore. report_url=session.reportUrl. Upserts InterviewReport(summary, transcript, video_url, detailed_scores).
+Notes: Plain dict response. No get_current_user dependency. proctoring_severity_flag derived from ProctoringLog.severity (critical/high/medium/low); cheat_probability mapped from flag (critical|high→high, medium→medium, else low). overall_interview_score=functional_score=evaluation.overallScore. report_url=session.reportUrl. Upserts InterviewReport(summary, transcript, video_url, detailed_scores). **(2026-06-27)** Also marks the applicant's most-recent non-completed `interview_invites` row status=completed + completed_at in the same transaction (request/response schema unchanged).
 
 ### `backend/app/routers/team.py`
 
@@ -2072,6 +2076,276 @@ Status codes: 200 OK; 400 — "source_type required" (missing source_type); 401 
 
 Notes: Upserts a `SourceAdapterConfig` keyed by (organisation_id, source_type). `config` is stored verbatim (intended to hold API-key refs/endpoints, never raw secrets in logs). Audit: `sources.configure` (detail includes is_enabled).
 
+### `backend/app/routers/invites.py`
+
+> Per-candidate unique interview links. A token (`uuid4().hex`, 32 hex chars) is minted into the `interview_invites` table and bound to an applicant (or left standalone). The emailed link `{INVITE_LINK_BASE}/i/{token}` carries the unguessable token (not the bare applicant id), so only the candidate who received it can enter; the lifecycle (`pending → started → completed`/`expired`) is single-use. Config: INVITE_LINK_BASE (default `http://localhost:8000`), INVITE_FROM_EMAIL (default `interviews@interviehire.com`), INVITE_TTL_DAYS (default 7). Mounted in `main.py`: the authed router at `/api/invites`, plus `public_link_router` at root for `GET /i/{token}`.
+
+#### POST /api/invites
+
+Mint (and optionally email) a unique interview link bound to one applicant. Provisions the stage + engine InterviewSession so the room has questions when the candidate opens the link.
+
+- **Auth:** JWT httpOnly cookie `token` (or Bearer) required via get_current_user; org context via get_active_org_id.
+- **Path params:** none
+- **Query params:** none
+
+Request (raw JSON object, body typed as `dict`):
+```json
+{
+  "applicant_id": "string, UUID (required)",
+  "stage": "screening | functional (optional) — default derived from applicant: 'functional' if applicant.functional_status is set, else 'screening'",
+  "send": "boolean (optional, default false)"
+}
+```
+
+Response:
+```json
+{
+  "token": "string (uuid4 hex)",
+  "link": "string — e.g. {INVITE_LINK_BASE}/i/{token}",
+  "status": "pending",
+  "applicant_id": "string (UUID)",
+  "candidate_email": "string",
+  "candidate_name": "string | null",
+  "role": "string | null",
+  "stage": "screening | functional",
+  "expires_at": "datetime ISO8601 | null",
+  "sent": "boolean"
+}
+```
+
+Status codes: 200 OK; 400 — "applicant_id is required" (missing) / "Invalid applicant_id" (not a UUID) / "Cannot create an interview invite for a test applicant." (applicant is a test applicant, via `_is_test_applicant`) / "This applicant has no email address to send an invite to." (applicant.email blank); 401 Not authenticated; 403/404 — applicant access denied / not found (via `_verify_applicant_access`).
+
+Notes: Plain dict response. Verifies applicant access, rejects test applicants and applicants with no email, then provisions the stage — for screening sets screening_status=scheduled (+screening_scheduled_at) when unset; for functional sets functional_status=scheduled (+functional_scheduled_at) when unset. Mints an `interview_invites` row (token=uuid4().hex, expires_at=now+INVITE_TTL_DAYS, status=pending) via `create_invite`, which **supersedes any prior PENDING invite for the same applicant+stage** (sets them status=expired) so only one active link exists; an already-`started` invite is left alone. Then calls `sync_applicant_to_ai` to provision the engine InterviewSession (failure is logged, non-fatal), and **binds the minted token onto the shared `InterviewSession.inviteToken`** (matching engine session id = str(applicant.id)) so the engine enforces it at the room + WebSocket layer (failure logged, non-fatal). role = job.role_name or job.title. When `send=true`, emails the link via `send_interview_invite_email` (failure logged, non-fatal — `sent` reflects the result).
+
+#### GET /api/invites
+
+List invites and their statuses (newest first) for one candidate (`applicant_id`) OR a whole job (`job_id`) so the dashboard can show link status without re-minting. Does NOT transition the lifecycle.
+
+- **Auth:** JWT httpOnly cookie `token` (or Bearer) required via get_current_user; org context via get_active_org_id.
+- **Path params:** none
+- **Query params:** `applicant_id` (string, UUID) OR `job_id` (string, UUID) — **exactly one required**. `applicant_id` filters to that candidate's invites; `job_id` returns all invites for that job.
+
+Request: none
+
+Response:
+```json
+{
+  "invites": [
+    {
+      "token": "string",
+      "link": "string — {INVITE_LINK_BASE}/i/{token}",
+      "status": "pending | started | completed | expired",
+      "stage": "string | null",
+      "applicant_id": "string (UUID) | null",
+      "created_at": "datetime ISO8601 | null",
+      "expires_at": "datetime ISO8601 | null",
+      "started_at": "datetime ISO8601 | null",
+      "completed_at": "datetime ISO8601 | null"
+    }
+  ],
+  "count": "integer"
+}
+```
+
+Status codes: 200 OK; 400 — "applicant_id or job_id query param is required" (neither supplied) / "Invalid applicant_id" / "Invalid job_id" (not a UUID); 401 Not authenticated; 403/404 — applicant access denied / not found (via `_verify_applicant_access`, when `applicant_id`) or job access denied / not found (via `_verify_job_access`, when `job_id`).
+
+Notes: Plain dict response. With `applicant_id`, verifies applicant access then filters to that applicant's `interview_invites` rows; with `job_id`, verifies job access then filters to that job's rows. Rows are ordered by created_at desc. `count` = number of rows.
+
+#### POST /api/invites/applicants
+
+Bulk-mint per-applicant invites (e.g. "invite all shortlisted") and optionally email them. Reuses the exact same per-applicant provisioning as POST /api/invites (stage provisioning, engine session sync, token binding, optional email) for each applicant.
+
+- **Auth:** JWT httpOnly cookie `token` (or Bearer) required via get_current_user; org context via get_active_org_id.
+- **Path params:** none
+- **Query params:** none
+
+Request (raw JSON object, body typed as `dict`):
+```json
+{
+  "applicant_ids": ["string, UUID"],
+  "stage": "screening | functional (optional) — derived per applicant if omitted",
+  "send": "boolean (optional, default false)"
+}
+```
+`applicant_ids` is required and must be a non-empty list.
+
+Response:
+```json
+{
+  "invited": [
+    {
+      "token": "string (uuid4 hex)",
+      "link": "string — {INVITE_LINK_BASE}/i/{token}",
+      "status": "pending",
+      "applicant_id": "string (UUID)",
+      "candidate_email": "string",
+      "candidate_name": "string | null",
+      "role": "string | null",
+      "stage": "screening | functional",
+      "expires_at": "datetime ISO8601 | null",
+      "sent": "boolean"
+    }
+  ],
+  "errors": [
+    { "applicant_id": "string", "error": "string" }
+  ],
+  "count": "integer"
+}
+```
+Each `invited[]` entry is the same per-applicant object returned by POST /api/invites.
+
+Status codes: 200 OK; 400 — "applicant_ids must be a non-empty list" (not a list, or empty); 401 Not authenticated.
+
+Notes: Plain dict response. Iterates `applicant_ids`, verifying access and calling the shared `_provision_invite_for_applicant` for each. **Per-applicant failures are collected in `errors` instead of aborting the batch** — invalid UUID → `{error:"Invalid applicant_id"}`; an `HTTPException` (test applicant, no email, access denied / not found via `_verify_applicant_access`) → its detail string; any other exception → `db.rollback()` + `{error:"Failed to create invite"}`. `count` = number of invites actually minted (length of `invited`).
+
+#### POST /api/invites/bulk
+
+Batch-mint STANDALONE invites (not bound to any applicant) and optionally email them.
+
+- **Auth:** JWT httpOnly cookie `token` (or Bearer) required via get_current_user; get_active_org_id resolved (not gated).
+- **Path params:** none
+- **Query params:** none
+
+Request (raw JSON object, body typed as `dict`):
+```json
+{
+  "candidates": [
+    { "email": "string (required)", "name": "string | null (optional)", "role": "string | null (optional)" }
+  ],
+  "send": "boolean (optional, default true)"
+}
+```
+`candidates` is required and must be a non-empty list.
+
+Response:
+```json
+{
+  "invited": [
+    { "email": "string", "token": "string", "link": "string" }
+  ],
+  "count": "integer"
+}
+```
+
+Status codes: 200 OK; 400 — "candidates must be a non-empty list" (not a list, or empty); 401 Not authenticated.
+
+Notes: Plain dict response. Per candidate, `invite_candidates` skips rows with a blank email, mints a standalone invite (applicant_id null) via `create_invite`, and — when `send=true` (default) — emails the link (per-row send failures are logged, non-fatal). `count` = number of invites actually minted.
+
+#### POST /api/invites/{token}/send
+
+Re-email an already-minted invite to its candidate — reuses the SAME link, so it never re-mints/invalidates a link the recruiter already copied.
+
+- **Auth:** JWT httpOnly cookie `token` (or Bearer) required via get_current_user; get_active_org_id resolved.
+- **Path params:** `token` (string) — the invite token.
+- **Query params:** none
+
+Request: none
+
+Response:
+```json
+{
+  "token": "string",
+  "link": "string",
+  "sent": "boolean",
+  "candidate_email": "string"
+}
+```
+
+Status codes: 200 OK; 404 — "Invite not found"; 403 — applicant access denied (only when the invite is bound to an applicant, via `_verify_applicant_access`); 502 — "Failed to send invite email"; 401 Not authenticated.
+
+Notes: Plain dict response. Does NOT re-mint — rebuilds the link from the stored token via `build_invite_link`. Authorises against the bound candidate's job only when `invite.applicant_id` is set.
+
+#### POST /api/invites/{token}/revoke
+
+Immediately kill a link (sets status=expired). No-op if the invite is already completed. Use when a link leaks or a candidate is withdrawn.
+
+- **Auth:** JWT httpOnly cookie `token` (or Bearer) required via get_current_user; get_active_org_id resolved.
+- **Path params:** `token` (string) — the invite token.
+- **Query params:** none
+
+Request: none
+
+Response:
+```json
+{
+  "token": "string",
+  "status": "expired | completed"
+}
+```
+
+Status codes: 200 OK; 404 — "Invite not found"; 403 — applicant access denied (only when the invite is bound to an applicant, via `_verify_applicant_access`); 401 Not authenticated.
+
+Notes: Plain dict response. When `invite.status != completed`, sets status=expired and commits; an already-completed invite is left untouched (returns its `completed` status). Authorises against the bound candidate's job only when `invite.applicant_id` is set.
+
+#### GET /api/invites/{token}
+
+Read-only resolution of a token → its room session id + status. Public (no auth) so the interview room or status checks can look it up. Does NOT transition the lifecycle.
+
+- **Auth:** public (none) — no get_current_user dependency.
+- **Path params:** `token` (string) — the invite token.
+- **Query params:** none
+
+Request: none
+
+Response:
+```json
+{
+  "token": "string",
+  "status": "pending | started | completed | expired",
+  "candidate_name": "string | null",
+  "role": "string | null",
+  "stage": "string | null",
+  "session_id": "string | null — the applicant id (engine session id)",
+  "expires_at": "datetime ISO8601 | null"
+}
+```
+
+Status codes: 200 OK; 404 — "Invite not found"; 429 — "Too many requests. Please slow down and try again shortly." (per-client-IP rate limit exceeded).
+
+Notes: Plain dict response. `session_id` = str(invite.applicant_id) when bound, else null. No lifecycle change. **Rate-limited per client IP** (basic in-memory fixed window via `_rate_limit`): **60 requests / 60 s**; exceeding returns 429. Best-effort, per-process (resets on restart).
+
+#### GET /i/{token}
+
+The candidate-facing unique link (mounted at root via `public_link_router`). Validates the single-use lifecycle and redirects into the interview room.
+
+- **Auth:** public (none).
+- **Path params:** `token` (string) — the invite token.
+- **Query params:** none
+
+Request: none
+
+Response (success): **302** redirect — `Location: {INTERVIEW_ROOM_URL}/interviewcandidateroom?sessionId={applicant_id}&ih_invite={token}`.
+
+Status codes / lifecycle (`_transition_for_entry`):
+- 302 — success: keys the room on the bound applicant id (engine session id) and carries `ih_invite={token}`. A `pending` invite flips to `started` (+started_at); an already-`started` invite is re-enterable (candidate reconnects after a drop).
+- 404 — unknown token (text/html error page "Link not found").
+- 410 — `status == completed` ("This interview has already been completed."), or past `expires_at` → sets status=expired then rejects, or `status == expired` ("This interview link has expired.") (all text/html). **(2026-06-28)** The EXPIRED 410 page now renders an "Email me a new link" button that POSTs to `/i/{token}/request-new`; the COMPLETED 410 page does NOT (completed interviews can't be re-issued).
+- 409 — valid/enterable invite but no bound applicant ("Interview not ready" — text/html).
+- 429 — "Too many requests. Please slow down and try again shortly." (per-client-IP rate limit exceeded; JSON HTTPException detail, not an HTML page).
+
+Notes: Non-302 responses (except 429) return an HTMLResponse error page (`_invite_error_html`) with the corresponding status code; only the success path is a RedirectResponse. **Rate-limited per client IP** (basic in-memory fixed window via `_rate_limit`): **30 requests / 60 s**; exceeding returns 429. Best-effort, per-process (resets on restart).
+
+#### POST /i/{token}/request-new
+
+Self-serve: a candidate whose link has expired requests a fresh one, emailed to the SAME address. Mounted at root via `public_link_router` (NOT under `/api`). Not available once the interview is completed.
+
+- **Auth:** public (none).
+- **Path params:** `token` (string) — the invite token.
+- **Query params:** none
+
+Request: none (no body).
+
+Response: text/html page (`_invite_error_html`) for every status — there is no JSON/redirect path.
+
+Status codes / behavior:
+- 200 — success: minted a fresh invite for the same candidate and emailed it. Applicant-bound invites are re-provisioned via the shared `_provision_invite_for_applicant` (stage provisioning + engine-session sync + token binding); standalone invites use `create_invite` + `send_interview_invite_email`. HTML confirmation page ("New link sent" — "We've emailed a fresh interview link to j***@domain…").
+- 404 — unknown token ("Link not found" — "We couldn't find that interview link.").
+- 410 — `status == completed` ("Already completed" — "This interview has already been completed, so a new link can't be issued.").
+- 429 — "Too many requests. Please slow down and try again shortly." (per-client-IP rate limit exceeded; JSON HTTPException detail, not an HTML page).
+- 500 — internal failure while re-issuing/emailing ("Something went wrong" — "We couldn't send a new link right now. Please contact your recruiter.").
+
+Notes: All HTML responses use `_invite_error_html`. **Rate-limited per client IP** (basic in-memory fixed window via `_rate_limit`): **5 requests / 300 s**; exceeding returns 429. Best-effort, per-process (resets on restart). The masked email in the confirmation copy comes from `_mask_email` (`jane@acme.com` → `j***@acme.com`).
+
 ---
 
 ## Interview Engine — Fastify
@@ -2288,9 +2562,9 @@ Notes: No Fastify schema. Upserts company by slug; finds-or-creates role/questio
 
 Fetches a single interview session with related company, candidate, jobRole (incl. its questions), and proctoringLogs.
 
-- **Auth:** Public. Global rate limit.
+- **Auth:** Public. Global rate limit. Per-candidate invite enforcement when the session is token-bound (see Query params).
 - **Path params:** `id`:string — InterviewSession.id (cuid)
-- **Query params:** none
+- **Query params:** `token`:string (optional) — the invite token. If the session has a non-null `inviteToken` and `token` does not match → 403. Token-free sessions ignore this param.
 
 Request: none
 
@@ -2314,17 +2588,17 @@ InterviewSession {
 // null if not found
 ```
 
-Status codes: 200 OK (body may be null if session not found); 429 rate limited; 500 on DB error.
+Status codes: 200 OK (body may be null if session not found); 403 `{ "error": "This interview link is invalid or has expired.", "code": "INVALID_TOKEN" }` when the session is token-bound and the `token` query param doesn't match; 429 rate limited; 500 on DB error.
 
-Notes: No Fastify schema; field set governed by the Prisma schema. Returns null (not 404) for unknown id.
+Notes: No Fastify schema; field set governed by the Prisma schema. Returns null (not 404) for unknown id. The token guard runs after the findUnique: only sessions with a non-null `inviteToken` enforce it, so legacy/scheduled/demo (token-free) sessions are unaffected.
 
 #### POST /api/interview/sessions/:id/start
 
 Marks the session IN_PROGRESS, sets startedAt (if unset), seeds the first AI question into the transcript if no AI turn exists yet, opens the transcript metadata row (status: recording), and returns the updated session plus the initial question text.
 
-- **Auth:** Public. Global rate limit.
+- **Auth:** Public. Global rate limit. Per-candidate invite enforcement when the session is token-bound (see Query params).
 - **Path params:** `id`:string — InterviewSession.id
-- **Query params:** none
+- **Query params:** `token`:string (optional) — the invite token. If the session has a non-null `inviteToken` and `token` does not match → 403. Token-free sessions ignore this param.
 
 Request: none (body ignored)
 
@@ -2337,9 +2611,9 @@ Response:
 }
 ```
 
-Status codes: 200 OK; 404/500 — uses findUniqueOrThrow, so unknown id throws (P2025) surfaced as 500-class; 429 rate limited.
+Status codes: 200 OK; 403 `{ "error": "This interview link is invalid or has expired.", "code": "INVALID_TOKEN" }` when the session is token-bound and the `token` query param doesn't match; 404/500 — uses findUniqueOrThrow, so unknown id throws (P2025) surfaced as 500-class; 429 rate limited.
 
-Notes: No Fastify schema. firstQuestion = first isActive question (orderBy createdAt asc) of the jobRole, else fallback. Calls ensureTranscriptMeta(id).
+Notes: No Fastify schema. The token guard runs after the findUniqueOrThrow: only sessions with a non-null `inviteToken` enforce it, so token-free sessions are unaffected and the existing settings checks still apply. firstQuestion = first isActive question (orderBy createdAt asc) of the jobRole, else fallback. Calls ensureTranscriptMeta(id).
 
 #### GET /api/interview/sessions/:id/vapi-config
 
@@ -2369,9 +2643,9 @@ Notes: No Fastify schema. Exact shape is whatever buildVapiAssistantConfig retur
 
 Marks the session COMPLETED, sets completedAt, and best-effort finalizes the transcript (.txt). A finalize failure is logged but does not fail the request.
 
-- **Auth:** Public. Global rate limit.
+- **Auth:** Public. Global rate limit. **Per-candidate invite token enforced** (see Notes).
 - **Path params:** `id`:string — InterviewSession.id
-- **Query params:** none
+- **Query params:** `token`?:string — optional invite token; required only when the session is token-bound (`inviteToken` set).
 
 Request: none (body ignored)
 
@@ -2384,17 +2658,17 @@ Response:
 }
 ```
 
-Status codes: 200 OK; 404/500 — prisma.update throws on unknown id (P2025); 429 rate limited.
+Status codes: 200 OK; **403 `{ error:'This interview link is invalid or has expired.', code:'INVALID_TOKEN' }`** — session has a non-null `inviteToken` and `?token=` doesn't match (via `blockedByInviteToken`); 404/500 — prisma.update throws on unknown id (P2025); 429 rate limited.
 
-Notes: No Fastify schema. finalizeTranscript(id) wrapped in .catch → returns null on error. Transcript .txt can also be rebuilt via POST /api/interviews/:id/transcript/finalize.
+Notes: No Fastify schema. **`blockedByInviteToken(req, reply)` runs first** — a token-bound session only serves the matching `?token=`; token-free sessions pass through unaffected. finalizeTranscript(id) wrapped in .catch → returns null on error. Transcript .txt can also be rebuilt via POST /api/interviews/:id/transcript/finalize.
 
 #### POST /api/interview/sessions/:id/answers
 
 Submits a candidate's text answer; the conversation director appends the answer to the transcript, decides whether to ask a follow-up / next question / closing line, persists the transcript, auto-captures both turns into the event log, and returns the AI's next utterance.
 
-- **Auth:** Public. Global rate limit.
+- **Auth:** Public. Global rate limit. **Per-candidate invite token enforced** (see Notes).
 - **Path params:** `id`:string — InterviewSession.id
-- **Query params:** none
+- **Query params:** `token`?:string — optional invite token; required only when the session is token-bound (`inviteToken` set).
 
 Request: application/json
 ```
@@ -2417,9 +2691,9 @@ Response:
 }
 ```
 
-Status codes: 400 'Answer text is required' (empty/missing text); 200 OK; 404/500 — handleCandidateTranscript throws 'Interview session not found' for unknown id (surfaced as 500); 429 rate limited.
+Status codes: **403 `{ error:'This interview link is invalid or has expired.', code:'INVALID_TOKEN' }`** — session has a non-null `inviteToken` and `?token=` doesn't match (via `blockedByInviteToken`, checked before body validation); 400 'Answer text is required' (empty/missing text); 200 OK; 404/500 — handleCandidateTranscript throws 'Interview session not found' for unknown id (surfaced as 500); 429 rate limited.
 
-Notes: No Fastify schema. Determines active question index from last AI transcript entry; enforces MAX_FOLLOWUPS_PER_QUESTION; updates session.status to IN_PROGRESS. Best-effort recordEventSafe for both turns.
+Notes: No Fastify schema. **`blockedByInviteToken(req, reply)` runs first** — a token-bound session only serves the matching `?token=`; token-free sessions pass through unaffected. Determines active question index from last AI transcript entry; enforces MAX_FOLLOWUPS_PER_QUESTION; updates session.status to IN_PROGRESS. Best-effort recordEventSafe for both turns.
 
 #### POST /api/interview/sessions/:id/transcript-text
 
@@ -2462,9 +2736,9 @@ Notes: No Fastify schema. Speaker classified by regex: aiRe=/character|interview
 
 Runs the Aviral rubric-grounded evaluation over the session's transcript and returns the canonical CandidateReport.
 
-- **Auth:** Public. Global rate limit.
+- **Auth:** Public. Global rate limit. **Per-candidate invite token enforced** (see Notes).
 - **Path params:** `id`:string — InterviewSession.id
-- **Query params:** none
+- **Query params:** `token`?:string — optional invite token; required only when the session is token-bound (`inviteToken` set).
 
 Request: none (body ignored)
 
@@ -2477,9 +2751,9 @@ Response:
 // EvalCandidateReport (aviral-eval): { overallScore, recommendation, perDimension skill scores, perQuestion breakdown, redFlags, ... } — see aviral-eval/types.ts / @interviehire/shared CandidateReport
 ```
 
-Status codes: 200 OK; 500 on evaluation error (session not found, missing transcript, evaluator failure); 429 rate limited.
+Status codes: 200 OK; **403 `{ error:'This interview link is invalid or has expired.', code:'INVALID_TOKEN' }`** — session has a non-null `inviteToken` and `?token=` doesn't match (via `blockedByInviteToken`); 500 on evaluation error (session not found, missing transcript, evaluator failure); 429 rate limited.
 
-Notes: No Fastify schema. Response wraps the service return in { evaluation }. Exact fields defined by the dashboard contract and aviral-eval/types.ts.
+Notes: No Fastify schema. **`blockedByInviteToken(req, reply)` runs first** — a token-bound session only serves the matching `?token=`; token-free sessions pass through unaffected. Response wraps the service return in { evaluation }. Exact fields defined by the dashboard contract and aviral-eval/types.ts.
 
 #### GET /api/interview/sessions/:id/candidate-report
 
@@ -3141,7 +3415,7 @@ Notes: room_id hardcoded to "global" — no per-session/per-room routing, no ses
 
 ### Interview Engine — Fastify: WS /ws
 
-Single WebSocket gateway for live interviews, shared by both candidate-room clients and the UE5 avatar. Mounted via `registerWebsocket(app)` → `app.get('/ws', { websocket: true }, ...)` at the **ROOT** — NO prefix (NOT under `/api`). Full URL: `ws(s)://<api-host>:4000/ws`. Client configures via `NEXT_PUBLIC_WS_URL` (e.g. `wss://.../ws`). After connecting a client MUST send a `register` message declaring its role and sessionId. The server keeps two in-memory Maps (sessionId → socket): `candidates` and `ueClients`, routing messages between a candidate and its paired UE5 avatar. Candidate transcripts are fed to `handleCandidateTranscript`; the reply is pushed to the UE5 avatar as `avatar_speak` and mirrored to the candidate as `ai_response`. Proctoring events are persisted to the proctoringLog table. On socket close the socket is removed from both Maps.
+Single WebSocket gateway for live interviews, shared by both candidate-room clients and the UE5 avatar. Mounted via `registerWebsocket(app)` → `app.get('/ws', { websocket: true }, ...)` at the **ROOT** — NO prefix (NOT under `/api`). Full URL: `ws(s)://<api-host>:4000/ws`. Client configures via `NEXT_PUBLIC_WS_URL` (e.g. `wss://.../ws`). After connecting a client MUST send a `register` message declaring its role and sessionId (plus an optional invite `token`). **Per-candidate invite enforcement:** for `role !== 'ue5'`, if the session has a non-null `inviteToken` and the supplied `token` doesn't match, the server replies `{ type:'error', code:'INVALID_TOKEN', message:'This interview link is invalid or has expired.' }` and does NOT register the socket; the trusted UE5 avatar (role 'ue5') and token-free sessions are unaffected. The server keeps two in-memory Maps (sessionId → socket): `candidates` and `ueClients`, routing messages between a candidate and its paired UE5 avatar. Candidate transcripts are fed to `handleCandidateTranscript`; the reply is pushed to the UE5 avatar as `avatar_speak` and mirrored to the candidate as `ai_response`. Proctoring events are persisted to the proctoringLog table. On socket close the socket is removed from both Maps.
 
 - **Auth:** none (no auth/token check; identity self-declared via register message)
 - **Path params:** none
@@ -3155,7 +3429,8 @@ All frames are JSON text: `socket.send(JSON.stringify(payload))`. Each message d
 {
   "type": "register",            // literal, required
   "role": "candidate" | "ue5",   // required — routing key
-  "sessionId": string            // required — map key pairing candidate <-> avatar
+  "sessionId": string,           // required — map key pairing candidate <-> avatar
+  "token?": string               // optional — invite token; checked for role !== 'ue5' when the session is token-bound
 }
 
 // 2. candidate_transcript (sent by candidate)
@@ -3192,6 +3467,11 @@ All frames are JSON text: `socket.send(JSON.stringify(payload))`. Each message d
 ```
 // 1. registered (reply to register; to the registering socket)
 { "type": "registered", "role": "candidate" | "ue5", "sessionId": string }
+
+// 1b. error — INVALID_TOKEN (reply to register; to the registering socket)
+// Sent for role !== 'ue5' when the session has a non-null inviteToken and the
+// supplied token doesn't match. The socket is NOT registered (added to neither Map).
+{ "type": "error", "code": "INVALID_TOKEN", "message": "This interview link is invalid or has expired." }
 
 // 2. avatar_speak (to the ue5 socket after candidate_transcript)
 {

@@ -8,7 +8,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-def send_email_via_resend(to_email: str, subject: str, html_content: str, attachment_content: str | None = None, attachment_name: str | None = None) -> bool:
+def send_email_via_resend(to_email: str, subject: str, html_content: str, attachment_content: str | None = None, attachment_name: str | None = None, from_override: str | None = None) -> bool:
     if not settings.RESEND_API_KEY:
         raise RuntimeError("Resend API Key is not configured.")
 
@@ -23,7 +23,7 @@ def send_email_via_resend(to_email: str, subject: str, html_content: str, attach
     }
 
     payload = {
-        "from": from_email,
+        "from": from_override or from_email,
         "to": [to_email],
         "subject": subject,
         "html": html_content
@@ -50,28 +50,33 @@ def send_email_via_resend(to_email: str, subject: str, html_content: str, attach
         logger.error(f"Error sending email via Resend to {to_email}: {e}")
         raise e
 
-def send_html_email(to_email: str, subject: str, html_content: str) -> bool:
+def send_html_email(to_email: str, subject: str, html_content: str, from_email: str | None = None, plain_content: str | None = None) -> bool:
     if settings.RESEND_API_KEY:
-        return send_email_via_resend(to_email, subject, html_content)
+        return send_email_via_resend(to_email, subject, html_content, from_override=from_email)
+
+    sender = from_email or settings.SMTP_FROM or "hr@interviehire.com"
 
     if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
         logger.warning(f"SMTP credentials not configured. Email to {to_email} will run in SIMULATION mode.")
-        print(f"\n==================== [SIMULATION EMAIL] ====================\nTo: {to_email}\nSubject: {subject}\n============================================================\n")
+        body_preview = f"\nBody:\n{plain_content}" if plain_content else ""
+        print(f"\n==================== [SIMULATION EMAIL] ====================\nFrom: {sender}\nTo: {to_email}\nSubject: {subject}{body_preview}\n============================================================\n")
         return True
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
-    msg['From'] = settings.SMTP_FROM or "hr@interviehire.com"
+    msg['From'] = sender
     msg['To'] = to_email
 
-    part2 = MIMEText(html_content, 'html')
-    msg.attach(part2)
+    # text/plain first so the HTML part is the preferred alternative (RFC 2046).
+    if plain_content:
+        msg.attach(MIMEText(plain_content, 'plain'))
+    msg.attach(MIMEText(html_content, 'html'))
 
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
             server.starttls()
             server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            server.sendmail(settings.SMTP_FROM or "hr@interviehire.com", to_email, msg.as_string())
+            server.sendmail(sender, to_email, msg.as_string())
         logger.info(f"Email sent successfully to {to_email}")
         return True
     except Exception as e:
@@ -495,4 +500,98 @@ def send_reschedule_confirmation_email(candidate_name: str, candidate_email: str
     </html>
     """
     return send_html_email(candidate_email, subject, html)
+
+
+def send_interview_invite_email(
+    candidate_name: str,
+    candidate_email: str,
+    role: str | None,
+    interview_link: str,
+    expires_at: datetime | None = None,
+) -> bool:
+    """Transactional per-candidate interview invite carrying the unique link.
+
+    Sent from the dedicated ``INVITE_FROM_EMAIL`` sender (isolated from the
+    recruiting/cold-email From so it never touches that reputation pool).
+    Plain-text + HTML alternative, brand styling (Poppins, coral CTA #F5542E,
+    ink #17171F). Transport selection and the SMTP-less simulation fallback are
+    handled by ``send_html_email``.
+    """
+    from html import escape as _esc
+
+    greeting_name = _esc(candidate_name) if candidate_name else "there"
+    role_label = _esc(role) if role else "the role"
+    expiry_str = expires_at.strftime("%B %d, %Y") if expires_at else None
+    subject = f"Your interview invitation — {role}" if role else "Your interview invitation"
+
+    # Plain-text alternative (kept in sync with the HTML below).
+    plain_lines = [
+        f"Hi {candidate_name or 'there'},",
+        "",
+        f"You've been invited to an AI-led interview for {role or 'the role'} with IntervieHire.",
+        "",
+        f"Your private interview link: {interview_link}",
+    ]
+    if expiry_str:
+        plain_lines.append(f"This link is unique to you and expires on {expiry_str}.")
+    else:
+        plain_lines.append("This link is unique to you — please don't share it.")
+    plain_lines += [
+        "",
+        "Before you begin: find a quiet spot and make sure your camera and microphone are on.",
+        "",
+        "— The IntervieHire Team",
+    ]
+    plain_content = "\n".join(plain_lines)
+
+    expiry_html = (
+        f'<p class="meta">This link is unique to you and expires on <strong>{expiry_str}</strong>.</p>'
+        if expiry_str
+        else '<p class="meta">This link is unique to you — please don\'t share it.</p>'
+    )
+
+    html = f"""<!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Your interview invitation</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+            body {{ font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#f4f4f6; color:#17171F; margin:0; padding:40px 0; }}
+            .card {{ max-width:560px; margin:0 auto; background:#ffffff; border:1px solid #ECECF1; border-radius:18px; padding:44px 40px; box-shadow:0 8px 30px rgba(23,23,31,0.06); }}
+            h1 {{ font-size:22px; font-weight:700; color:#17171F; margin:0 0 18px; }}
+            p {{ font-size:15px; line-height:1.65; color:#3A3A45; margin:0 0 16px; }}
+            .role {{ font-weight:600; color:#17171F; }}
+            .cta {{ text-align:center; margin:32px 0 18px; }}
+            .btn {{ display:inline-block; background:#F5542E; color:#ffffff !important; text-decoration:none; font-weight:600; font-size:15px; padding:14px 34px; border-radius:10px; }}
+            .link {{ font-size:13px; color:#6B6B76; word-break:break-all; margin-top:0; }}
+            .meta {{ font-size:13px; color:#6B6B76; }}
+            .footer {{ font-size:12px; color:#9A9AA5; margin-top:36px; border-top:1px solid #ECECF1; padding-top:20px; text-align:center; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>You're invited to your interview</h1>
+            <p>Hi {greeting_name},</p>
+            <p>You've been invited to an AI-led interview for <span class="role">{role_label}</span> with IntervieHire.</p>
+            <div class="cta">
+                <a href="{interview_link}" class="btn">Start your interview</a>
+            </div>
+            <p class="link">{interview_link}</p>
+            {expiry_html}
+            <p class="meta">Before you begin: find a quiet spot and make sure your <strong>camera and microphone</strong> are on.</p>
+            <div class="footer">This invitation was sent by IntervieHire. If you weren't expecting it, you can safely ignore this email.</div>
+        </div>
+    </body>
+    </html>
+    """
+
+    return send_html_email(
+        candidate_email,
+        subject,
+        html,
+        from_email=settings.INVITE_FROM_EMAIL,
+        plain_content=plain_content,
+    )
 

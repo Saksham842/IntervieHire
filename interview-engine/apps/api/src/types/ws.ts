@@ -1,2 +1,2 @@
 export type WsRole = 'candidate' | 'ue5';
-export interface RegisterMessage { type: 'register'; role: WsRole; sessionId: string; }
+export interface RegisterMessage { type: 'register'; role: WsRole; sessionId: string; token?: string; }

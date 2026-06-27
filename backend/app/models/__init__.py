@@ -4,6 +4,7 @@ from app.models.job import Job, JobStatus, JobCollaborator
 from app.models.applicant import Applicant, InterviewStatus, CheatProbability, ApplicantSource
 from app.models.ai_integration import Company, Candidate, JobRole, Question, InterviewSession, ProctoringLog
 from app.models.interview_report import InterviewReport
+from app.models.interview_invite import InterviewInvite, InviteStatus
 # Talent Finder (AI sourcing) tables — imported so Base.metadata.create_all
 # registers them at startup. Additive; does not touch the interview pipeline.
 from app.talent_finder import models as talent_finder_models  # noqa

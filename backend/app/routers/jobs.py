@@ -2000,6 +2000,25 @@ def update_applicant(
     db.commit()
     db.refresh(applicant)
 
+    # Auto-revoke any live interview link when a candidate is rejected: expire the
+    # backend invites AND rotate the engine session's bound token to a fresh,
+    # never-shared value so a saved room URL stops working immediately.
+    if applicant.decision == "rejected":
+        try:
+            import uuid as _uuid
+            from app.models.interview_invite import InterviewInvite, InviteStatus
+            db.query(InterviewInvite).filter(
+                InterviewInvite.applicant_id == applicant.id,
+                InterviewInvite.status.in_([InviteStatus.pending, InviteStatus.started]),
+            ).update({InterviewInvite.status: InviteStatus.expired}, synchronize_session=False)
+            from app.models.ai_integration import InterviewSession as _EngineSession
+            sess = db.query(_EngineSession).filter(_EngineSession.id == str(applicant.id)).first()
+            if sess is not None and sess.inviteToken:
+                sess.inviteToken = _uuid.uuid4().hex
+            db.commit()
+        except Exception as revoke_err:
+            logger.error(f"Failed to auto-revoke invites for rejected applicant {applicant.id}: {revoke_err}")
+
     # 1. Always regenerate a fresh token on every advance so a new interview link is generated
     if (has_screening_update and applicant.screening_status) or (has_functional_update and applicant.functional_status):
         import uuid
@@ -2358,7 +2377,27 @@ def interview_completed_webhook(
     )
     applicant.functional_status = InterviewStatus.completed
     applicant.report_url = session.reportUrl
-    
+
+    # Mark this candidate's unique interview invite completed (single-use terminal
+    # state) — same transaction as the applicant update below.
+    try:
+        from app.models.interview_invite import InterviewInvite, InviteStatus
+        from datetime import datetime, timezone
+        invite = (
+            db.query(InterviewInvite)
+            .filter(
+                InterviewInvite.applicant_id == applicant.id,
+                InterviewInvite.status != InviteStatus.completed,
+            )
+            .order_by(InterviewInvite.created_at.desc())
+            .first()
+        )
+        if invite:
+            invite.status = InviteStatus.completed
+            invite.completed_at = datetime.now(timezone.utc)
+    except Exception as invite_err:
+        logger.error(f"Failed to mark interview invite completed for {applicant.id}: {invite_err}")
+
     # 4. Extract video url from transcript or use uploads
     video_url = None
     transcript_list = session.transcript or []

@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     # Local: :3001.  Production: https://interviehire.com  (→ .../interview)
     INTERVIEW_ROOM_URL: str = "http://localhost:3001"
 
+    # Per-candidate unique interview invite links (`/i/{token}`).
+    # INVITE_LINK_BASE is the origin that serves `GET /i/{token}` — this backend,
+    # or whatever host/rewrite is put in front of it (e.g. app.interviehire.com/i/*
+    # rewritten to the backend). The emailed link is `{INVITE_LINK_BASE}/i/{token}`.
+    INVITE_LINK_BASE: str = "http://localhost:8000"
+    # Dedicated transactional sender for interview invites — isolated from the
+    # recruiting/cold-email From so it never touches that reputation pool.
+    INVITE_FROM_EMAIL: str = "interviews@interviehire.com"
+    # Days a freshly-minted invite link stays valid before it auto-expires.
+    INVITE_TTL_DAYS: int = 7
+
     # SMTP Settings
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

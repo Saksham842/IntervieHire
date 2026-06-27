@@ -61,6 +61,9 @@ export default function Interview() {
   const { markAiFinished } = useSpeechMetrics();
   const transcript = useTranscript(sessionId);
   const wsRef = useRef<WebSocket | null>(null);
+  // Per-candidate invite token from the link (?ih_invite=). Forwarded to the
+  // token-enforced engine endpoints (/start, GET session, WS register).
+  const inviteTokenRef = useRef('');
   const sessionStartedRef = useRef(false);
   const [transcriptReady, setTranscriptReady] = useState(false);
 
@@ -88,6 +91,8 @@ export default function Interview() {
     const params = new URLSearchParams(window.location.search);
     const queryId = params.get('sessionId') || params.get('session');
     if (queryId) setSessionId(queryId);
+    const token = params.get('ih_invite') || params.get('token');
+    if (token) inviteTokenRef.current = token;
   }, []);
 
   // Load per-job interview settings + company branding for a real session. Best
@@ -97,7 +102,9 @@ export default function Interview() {
     let alive = true;
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}`);
+        const tokenQS = inviteTokenRef.current ? `?token=${encodeURIComponent(inviteTokenRef.current)}` : '';
+        const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}${tokenQS}`);
+        if (res.status === 403) { if (alive) setStartError('This interview link is invalid or has expired.'); return; }
         if (!res.ok) return;
         const s = await res.json();
         if (!alive) return;
@@ -119,7 +126,8 @@ export default function Interview() {
     let alive = true;
     async function fetchSessionQuestions() {
       try {
-        const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}`);
+        const tokenQS = inviteTokenRef.current ? `?token=${encodeURIComponent(inviteTokenRef.current)}` : '';
+        const res = await fetch(`${API_URL}/api/interview/sessions/${sessionId}${tokenQS}`);
         if (!res.ok) return;
         const data = await res.json();
         if (alive && data?.jobRole?.questions) {
@@ -162,9 +170,13 @@ export default function Interview() {
     bootstrapDemoSession();
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'register', role: 'candidate', sessionId }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'register', role: 'candidate', sessionId, token: inviteTokenRef.current || undefined }));
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
+      if (msg.type === 'error' && msg.code === 'INVALID_TOKEN') {
+        setStartError('This interview link is invalid or has expired.');
+        return;
+      }
       if (msg.type === 'ai_response') {
         setMessages((m) => [...m, { speaker: 'ai', text: msg.text }]);
         markAiFinished();
@@ -261,7 +273,8 @@ export default function Interview() {
         // Honor the recruiter's interview settings enforced server-side at /start
         // (disabled / late / reattempt / CV required). On a block, surface the
         // message and stop instead of proceeding into a broken room.
-        const startRes = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start`, { method: 'POST' });
+        const startTokenQS = inviteTokenRef.current ? `?token=${encodeURIComponent(inviteTokenRef.current)}` : '';
+        const startRes = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start${startTokenQS}`, { method: 'POST' });
         if (!startRes.ok) {
           let msg = 'This interview could not be started.';
           try { const j = await startRes.json(); if (j?.error) msg = j.error; } catch { /* keep default */ }
@@ -316,7 +329,7 @@ export default function Interview() {
       const fin = await transcript.finalize();
       if (fin?.status === 'finalized' || fin?.status === 'empty') setTranscriptReady(true);
 
-      await fetch(`${API_URL}/api/interview/sessions/${sessionId}/complete`, { method: 'POST' });
+      await fetch(`${API_URL}/api/interview/sessions/${sessionId}/complete${inviteTokenRef.current ? `?token=${encodeURIComponent(inviteTokenRef.current)}` : ''}`, { method: 'POST' });
 
       setReportStatus('Generating report from transcript…');
       const eRes = await fetch(`${API_URL}/api/interviews/${sessionId}/report`, { method: 'POST' });
