@@ -42,10 +42,13 @@ services:
         value: none
       - key: COOKIE_SECURE
         value: "true"
-      # Candidate interview room — the emailed calendar invite links to the
-      # site's /interview panel (must be where the candidate room is served).
+      # Candidate interview room (the engine web app — a SEPARATE Vercel deploy).
+      # The scheduling email's interview link is built as
+      # {INTERVIEW_ROOM_URL}/interviewcandidateroom?sessionId=… so this MUST be the
+      # room's own origin. The room lives at interview.interviehire.com — NOT
+      # interviehire.com (that host serves the dashboard, so the path 404s there).
       - key: INTERVIEW_ROOM_URL
-        value: https://interviehire.com
+        value: https://interview.interviehire.com
       # Per-candidate interview invite links (/i/{token}). The backend serves the
       # /i/{token} gate, so this must be the backend's own public origin (NOT a
       # front-end), else emailed/copied links point nowhere.
