@@ -46,9 +46,17 @@
 .da-row-chev { color: var(--color-text-faint); flex-shrink: 0; }
 
 /* ── detail ── */
-.da-detail-head { margin-bottom: 2px; }
+.da-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
 .da-back { font-family: var(--font-body); font-size: 0.76rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface-2); border: 1px solid var(--glass-border); border-radius: 9px; padding: 7px 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: var(--spring-fast); }
 .da-back:hover { border-color: var(--glass-border-hover); color: var(--color-text); }
+/* "Open full report" sits on the same flex row as "All candidates" and matches its
+   box model so the two top buttons align (P7); margin-left:auto pushes it right. */
+.da-open-report { margin-left: auto; font-family: var(--font-body); font-size: 0.76rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface-2); border: 1px solid var(--glass-border); border-radius: 9px; padding: 7px 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: var(--spring-fast); }
+.da-open-report:hover { border-color: var(--glass-border-hover); color: var(--color-text); }
+/* Hiring-decision filter beside the "Candidate intelligence" heading (P8). */
+.da-filter { align-self: flex-start; font-family: var(--font-body); font-size: 0.74rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface-2); border: 1px solid var(--glass-border); border-radius: 9px; padding: 6px 10px; cursor: pointer; transition: var(--spring-fast); }
+.da-filter:hover { border-color: var(--glass-border-hover); color: var(--color-text); }
+.da-filter:focus-visible { outline: none; border-color: var(--color-gold); }
 
 .da-critical-banner { display: flex; align-items: center; gap: 9px; padding: 11px 14px; background: rgba(248, 113, 113, .1); border: 1px solid rgba(248, 113, 113, .3); border-radius: 12px; color: #f87171; font-size: 0.8rem; font-weight: 600; }
 

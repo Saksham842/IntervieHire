@@ -1400,15 +1400,21 @@ def create_test_session(
         Applicant.job_id == job_id,
         Applicant.remarks == TEST_SESSION_REMARK
     ).first()
+    # The test applicant carries the recruiter's own name so the avatar greets the
+    # account running the preview (P6) — never a hardcoded/placeholder candidate name.
+    tester_name = (current_user.name or "").strip() or "Test Candidate"
     if not test_applicant:
         test_applicant = Applicant(
             job_id=job_id,
-            name="Test Candidate",
+            name=tester_name,
             email=f"test-session+{job_id}@interviehire.local",
             source=ApplicantSource.direct_link,
             remarks=TEST_SESSION_REMARK,
         )
         db.add(test_applicant)
+    else:
+        # Reuse: refresh the name in case the signed-in account changed since last test.
+        test_applicant.name = tester_name
 
     # Schedule a minute in the past so the engine never treats it as locked/early.
     now = datetime.now(timezone.utc) - timedelta(minutes=1)

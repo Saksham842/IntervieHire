@@ -877,7 +877,8 @@ async function importResumesCandidates() {
 
   // Persist first so the candidates survive the hydrate (no manual refresh), then
   // analyse against their real backend ids (the resume caches were re-keyed).
-  const backendIds = await persistImportedCandidates(importedCandIds, activeJob, 'bulk_upload');
+  // Resume (PDF/DOC) intake counts as "Direct" — only CSV uploads are "Bulk".
+  const backendIds = await persistImportedCandidates(importedCandIds, activeJob, 'direct_link');
   navigateToJobDetail(AppState.activeJobId);
 
   // Auto-run resume analysis only for the Resume stage: a stage-scoped visit runs

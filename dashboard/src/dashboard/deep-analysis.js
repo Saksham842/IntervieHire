@@ -171,7 +171,7 @@ export function buildSampleCandidateReport(candidate, job) {
   };
 }
 
-const daUi = { selectedId: null, openAnswerId: null, showAllDims: false, openDimKey: null, testOpen: false };
+const daUi = { selectedId: null, openAnswerId: null, showAllDims: false, openDimKey: null, testOpen: false, hiringFilter: 'all' };
 
 // Live (api mode) report cache: candidateId -> { state:'loading'|'ready'|'pending'|'error', report?, error? }.
 const liveReports = new Map();
@@ -344,7 +344,7 @@ function detailShell(candidate, functionalHTML) {
   return `
     <div class="da-detail-head">
       <button class="da-back" data-action="back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg> All candidates</button>
-      <button class="da-open-report" data-action="open-report" data-cid="${escapeHTML(candidate.id)}" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:#cfcfcf;border-radius:7px;padding:6px 11px;font-size:12px;cursor:pointer;">Open full report <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+      <button class="da-open-report" data-action="open-report" data-cid="${escapeHTML(candidate.id)}">Open full report <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
     <div class="da-detail-id" style="display:flex;align-items:center;gap:12px;margin:14px 0 4px;">
       <span class="da-avatar" style="width:40px;height:40px;font-size:15px;">${escapeHTML(initials(candidate.name))}</span>
@@ -378,9 +378,23 @@ function rosterMarkup(job, reports) {
   const avg = scored.length ? Math.round(scored.reduce((a, s) => a + s, 0) / scored.length) : 0;
   const interviewed = reports.filter((r) => r.report.stages && r.report.stages.functional).length;
 
+  // Hiring-decision filter (P8): narrows the list below to the recruiter's Hired /
+  // Rejected calls. The stat strip stays on the full analysed set.
+  const filter = daUi.hiringFilter || 'all';
+  const visible = reports.filter((r) =>
+    filter === 'all' ? true
+      : filter === 'hired' ? r.candidate.decision === 'hired'
+        : r.candidate.decision === 'rejected'
+  );
+
   return `
     <div class="da-roster-head">
       <div><h2 class="da-title">Candidate intelligence</h2><p class="da-sub">${reports.length} analysed candidate${reports.length !== 1 ? 's' : ''} · resume, screening &amp; interview · ranked by score</p></div>
+      <select class="da-filter" data-action="filter" aria-label="Filter candidates by hiring decision">
+        <option value="all"${filter === 'all' ? ' selected' : ''}>All</option>
+        <option value="hired"${filter === 'hired' ? ' selected' : ''}>Hired</option>
+        <option value="rejected"${filter === 'rejected' ? ' selected' : ''}>Rejected</option>
+      </select>
     </div>
     <div class="da-stat-strip">
       <div class="da-stat"><span class="da-stat-num">${reports.length}</span><span class="da-stat-label">Candidates</span></div>
@@ -389,7 +403,9 @@ function rosterMarkup(job, reports) {
       <div class="da-stat"><span class="da-stat-num" style="color:${interviewed ? '#34d399' : '#9a9a9a'};">${interviewed}</span><span class="da-stat-label">Interviewed</span></div>
     </div>
     <div class="da-roster">
-      ${reports.map((r, i) => rosterRow(r, i)).join('')}
+      ${visible.length
+        ? visible.map((r, i) => rosterRow(r, i)).join('')
+        : `<div class="da-li muted" style="text-align:center;padding:20px;">No ${filter === 'hired' ? 'hired' : 'rejected'} candidates yet.</div>`}
     </div>`;
 }
 
@@ -639,6 +655,15 @@ function bind(container, job) {
     } else if (t.classList && t.classList.contains('da-dim-mini') && t.dataset.dim) {
       e.preventDefault(); const k = `${t.dataset.aid}::${t.dataset.dim}`; daUi.openDimKey = daUi.openDimKey === k ? null : k; renderDeepAnalysisPane(job, container);
     }
+  };
+  // Hiring-decision filter dropdown (P8). Re-assigned each render like onclick/onkeydown,
+  // so it never stacks listeners.
+  container.onchange = (e) => {
+    const sel = e.target.closest && e.target.closest('.da-filter');
+    if (!sel) return;
+    daUi.hiringFilter = sel.value;
+    soundEngine.playClick();
+    renderDeepAnalysisPane(job, container);
   };
 }
 

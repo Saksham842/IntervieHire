@@ -855,7 +855,7 @@ async function runResumeAnalysis(cid, job, opts = {}) {
       } else {
         const registered = cand.backendId
           ? Promise.resolve(cand.backendId)
-          : apiAddApplicant(job.id, { name: cand.name, email: cand.email, phone: cand.phone, entryMethod: 'bulk_upload' }).then((created) => {
+          : apiAddApplicant(job.id, { name: cand.name, email: cand.email, phone: cand.phone, entryMethod: 'direct_link' }).then((created) => {
               if (!created || !created.id) throw new Error('Could not register the candidate in the backend.');
               cand.backendId = created.id;
               cand.jobId = job.id;

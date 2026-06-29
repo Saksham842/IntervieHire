@@ -554,6 +554,11 @@ function mapApplicantOutToCandidate(a = {}) {
     resumeAnalysed: a.resume_analysed ?? null,
     resumeShortlisted: a.resume_shortlisted ?? null,
     decision: a.decision ?? null,
+    // Hydrate the persistent Recruiter Notes box from the backend `remarks` TEXT
+    // column so typed notes survive a refetch (without this the box re-renders empty
+    // and looks unsaved). The test-session sentinel overloads the same column, so
+    // never surface it as notes.
+    recruiterNotes: (a.remarks && a.remarks !== '__ih_test_session__') ? a.remarks : '',
     // Recruiter screening result — the backend sends these (ApplicantOut), the
     // dashboard's report + Deep Analysis read them off the candidate. Without this
     // mapping the screening block stays blank in api mode even when scored.

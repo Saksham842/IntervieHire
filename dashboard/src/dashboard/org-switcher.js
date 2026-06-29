@@ -5,12 +5,13 @@
 // Gated on window.IH_USER_TYPE (set by DashboardShell from /me). org_admins and
 // members never see the trigger — and the backend 403s these endpoints anyway,
 // so this is defence in depth, not the only guard.
-import { document, window } from './runtime.js';
+import { document, window, signal } from './runtime.js';
 import { escapeHTML } from './escape.js';
 import { showPremiumToast } from './sourcing.js';
 import { apiListOrganisations, apiSwitchContext } from './api.js';
 
 let cachedOrgs = null; // fetched once per session; re-rendered on every init.
+let docListenerSignal = null; // the runtime signal the outside-click listener is bound under.
 
 function renderOrgs(menu) {
   const orgs = Array.isArray(cachedOrgs) ? cachedOrgs : [];
@@ -49,9 +50,11 @@ export async function initOrgSwitcher() {
   wrap.style.display = '';
   updateLabel(trigger);
 
-  // Bind once per element. The dataset flag survives module re-init but NOT DOM
-  // replacement, so a React remount re-binds the fresh trigger. Mirrors the
-  // logout-button binding pattern in DashboardShell.
+  // Native, element-scoped listeners (trigger + menu) live as long as the DOM
+  // element, so bind them once per element. The dataset flag survives module
+  // re-init but resets when a remount replaces the trigger. Mirrors the
+  // logout-button binding pattern in DashboardShell. (The outside-click listener
+  // is bound separately below — it has a different, signal-scoped lifetime.)
   if (!trigger.dataset.ihOrgBound) {
     trigger.dataset.ihOrgBound = '1';
 
@@ -65,12 +68,6 @@ export async function initOrgSwitcher() {
       if (menu.style.display !== 'none') { closeMenu(); return; }
       menu.style.display = 'block';
       trigger.setAttribute('aria-expanded', 'true');
-    });
-
-    // Outside-click closes. The runtime document carries the AbortController
-    // signal, so this listener is torn down when React unmounts the surface.
-    document.addEventListener('click', (e) => {
-      if (!wrap.contains(e.target)) closeMenu();
     });
 
     // Delegated item clicks → switch active org + reload into that context.
@@ -88,6 +85,24 @@ export async function initOrgSwitcher() {
         item.removeAttribute('disabled');
         showPremiumToast((err && err.message) || 'Could not switch organisation.', 'error');
       }
+    });
+  }
+
+  // Outside-click closes the menu. This listener lives on the runtime `document`,
+  // so it carries the AbortController signal and is torn down by disposeRuntime()
+  // even when the trigger DOM (and its dataset flag) survives the re-init — which
+  // would otherwise leave it permanently unbound after a remount. Gate it on the
+  // signal identity (not the per-element flag) so it re-binds whenever the runtime
+  // is fresh, and resolve nodes at click-time so it never holds a detached wrap.
+  if (docListenerSignal !== signal) {
+    docListenerSignal = signal;
+    document.addEventListener('click', (e) => {
+      const w = document.getElementById('org-switcher');
+      if (!w || w.contains(e.target)) return;
+      const m = document.getElementById('org-switcher-menu');
+      if (m) m.style.display = 'none';
+      const t = document.getElementById('btn-org-switcher');
+      if (t) t.setAttribute('aria-expanded', 'false');
     });
   }
 
