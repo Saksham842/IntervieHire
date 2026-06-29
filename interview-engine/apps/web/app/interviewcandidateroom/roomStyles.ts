@@ -253,7 +253,7 @@ export const roomStyles = `
 
   .question-card { border-radius: 20px; padding: 24px 34px; }
   .question-top { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-  .question-card h2 { margin: 0; font: 800 clamp(22px, 2vw, 29px) Manrope, sans-serif; line-height: 1.3; letter-spacing: -.04em; }
+  .question-card h2 { margin: 0; font: 800 clamp(16px, 1.25vw, 20px) Manrope, sans-serif; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: break-word; max-height: 34vh; overflow-y: auto; }
   .question-meta { color: #778195; font-size: 12px; letter-spacing: .28em; text-transform: uppercase; margin-top: 10px; }
 
   .tag {
