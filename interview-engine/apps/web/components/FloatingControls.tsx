@@ -28,6 +28,10 @@ export function FloatingControls() {
     return 'home';
   }, [pathname]);
 
+  // Hide the floating Home link + DeepSeek AI-assistant during the candidate
+  // interview — candidates shouldn't navigate away or open a help desk mid-test.
+  const hidden = !!pathname && (pathname.startsWith('/interviewcandidateroom') || pathname.startsWith('/interview'));
+
   async function sendMessage() {
     const prompt = input.trim();
     if (!prompt || loading) return;
@@ -51,6 +55,8 @@ export function FloatingControls() {
       setLoading(false);
     }
   }
+
+  if (hidden) return null;
 
   return (
     <>
