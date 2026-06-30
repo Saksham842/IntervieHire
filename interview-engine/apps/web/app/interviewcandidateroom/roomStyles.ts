@@ -210,12 +210,20 @@ export const roomStyles = `
   .hd-audio { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; letter-spacing: .28em; text-transform: uppercase; }
   .hd-audio i { width: 7px; height: 7px; border-radius: 999px; background: var(--lime); }
 
-  .right-stack { display: grid; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; gap: 30px; }
+  .right-stack { display: grid; min-height: 0; grid-template-rows: minmax(0, 1fr); gap: 30px; }
 
+  /* Candidate camera = small picture-in-picture in the bottom-right corner of
+     Lina's avatar panel (Google-Meet style), so the right column is entirely
+     free for the question text. */
   .candidate-panel {
-    position: relative; min-height: 340px; overflow: hidden; border-radius: 20px;
-    background: #020617;
+    position: absolute; z-index: 4; right: 22px; bottom: 22px;
+    width: clamp(168px, 19vw, 248px); aspect-ratio: 16 / 10;
+    overflow: hidden; border-radius: 16px; background: #020617;
+    border: 1px solid rgba(255, 255, 255, .2);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
   }
+  .candidate-panel .you-pill { top: 8px; left: 8px; padding: 4px 9px; font-size: 10px; letter-spacing: .16em; }
+  .candidate-panel .candidate-footer { padding: 8px 10px; }
 
   .candidate-video {
     position: absolute; inset: 0; width: 100%; height: 100%;
@@ -251,9 +259,11 @@ export const roomStyles = `
 
   .mic { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 999px; background: rgba(0, 0, 0, .55); }
 
-  .question-card { border-radius: 20px; padding: 24px 34px; }
-  .question-top { display: flex; align-items: center; justify-content: flex-end; gap: 18px; margin-bottom: 16px; }
-  .question-card h2 { margin: 0; font: 700 clamp(15px, 1vw, 18px) Manrope, sans-serif; line-height: 1.5; letter-spacing: -.01em; overflow-wrap: break-word; max-height: 42vh; overflow-y: auto; }
+  .question-card { border-radius: 20px; padding: 24px 34px; display: flex; flex-direction: column; min-height: 0; }
+  .question-top { display: flex; align-items: center; justify-content: flex-end; gap: 18px; margin-bottom: 16px; flex: 0 0 auto; }
+  /* h2 grows to fill the now full-height right column and scrolls if the question
+     is very long, so the COMPLETE question is shown rather than a clipped end. */
+  .question-card h2 { margin: 0; flex: 1 1 auto; min-height: 0; font: 700 clamp(16px, 1.1vw, 20px) Manrope, sans-serif; line-height: 1.5; letter-spacing: -.01em; overflow-wrap: break-word; overflow-y: auto; }
   .question-meta { color: #778195; font-size: 12px; letter-spacing: .28em; text-transform: uppercase; margin-top: 10px; }
 
   .tag {

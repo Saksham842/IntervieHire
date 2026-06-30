@@ -99,23 +99,30 @@ export default function Interview() {
         const res = await fetch(`${API_URL}/api/interviews/${sessionId}/transcript`);
         if (!res.ok) return;
         const data = await res.json();
-        // Pull ONLY the questions Lina asked: split her speech into sentences and
-        // keep the ones that read as a question — drop her explanations and the
-        // candidate's answers (candidate is a different speaker anyway).
-        const isQuestion = (s: string) =>
-          /\?\s*$/.test(s) ||
-          /^(what|why|how|when|where|which|who|can you|could you|would you|do you|have you|tell me|describe|walk me|explain|give me|share|talk me)\b/i.test(s);
+        // Group Lina's CONSECUTIVE speech into turns (a turn = everything she
+        // said since the candidate last spoke) and show the FULL turn — so the
+        // candidate sees the COMPLETE question with its lead-in, not just a
+        // trailing fragment ("more specifically?") that sentence-splitting would
+        // surface on its own. Candidate speech closes the current turn. Keep only
+        // turns that actually contain a question.
+        const looksLikeQuestion = (s: string) =>
+          /\?/.test(s) ||
+          /\b(what|why|how|when|where|which|who|can you|could you|would you|do you|have you|tell me|describe|walk me|explain|give me|share|talk me)\b/i.test(s);
         const qs: { text: string; ts: number }[] = [];
+        let cur: { text: string; ts: number } | null = null;
         for (const e of (data.events || [])) {
-          if (e?.speaker !== 'interviewer' || e?.source === 'manual') continue;
-          const ts = e?.timestampMs ?? 0;
-          for (const s of String(e?.text || '').split(/(?<=[.?!])\s+/)) {
-            const t = s.trim();
-            if (t.length > 8 && isQuestion(t) && (qs.length === 0 || qs[qs.length - 1].text !== t)) {
-              qs.push({ text: t, ts });
-            }
+          const sp = e?.speaker;
+          if (sp === 'interviewer' && e?.source !== 'manual') {
+            const t = String(e?.text || '').trim();
+            if (!t) continue;
+            if (cur) cur.text = `${cur.text} ${t}`.trim();
+            else cur = { text: t, ts: e?.timestampMs ?? 0 };
+          } else if (sp === 'candidate') {
+            if (cur && cur.text.length > 8 && looksLikeQuestion(cur.text)) qs.push(cur);
+            cur = null;
           }
         }
+        if (cur && cur.text.length > 8 && looksLikeQuestion(cur.text)) qs.push(cur);
         if (!alive) return;
         if (qs.length > linaCountRef.current) {
           linaCountRef.current = qs.length;
@@ -668,9 +675,8 @@ export default function Interview() {
             <div className="status-pill">
               <i className="red-dot" /> Live · Associate
             </div>
-          </section>
-
-          <aside className="right-stack">
+            {/* Candidate camera as a Google-Meet-style PiP in the corner of Lina's
+                panel, so the right column is free to show the full question. */}
             <section className="candidate-panel">
               <video
                 ref={videoRef}
@@ -685,17 +691,12 @@ export default function Interview() {
                 <i /> You
               </div>
               <div className="candidate-footer">
-                <div className="mini-bars">
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                </div>
                 <div className="mic">{micOn ? '🎙' : '🔇'}</div>
               </div>
             </section>
+          </section>
 
+          <aside className="right-stack">
             <section className="question-card">
               <div className="question-top">
                 <div className="tag">{question.tag}</div>
