@@ -252,14 +252,14 @@ export const roomStyles = `
   .mic { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 999px; background: rgba(0, 0, 0, .55); }
 
   .question-card { border-radius: 20px; padding: 24px 34px; }
-  .question-top { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-  .question-card h2 { margin: 0; font: 800 clamp(16px, 1.25vw, 20px) Manrope, sans-serif; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: break-word; max-height: 34vh; overflow-y: auto; }
+  .question-top { display: flex; align-items: center; justify-content: flex-end; gap: 18px; margin-bottom: 16px; }
+  .question-card h2 { margin: 0; font: 700 clamp(15px, 1vw, 18px) Manrope, sans-serif; line-height: 1.5; letter-spacing: -.01em; overflow-wrap: break-word; max-height: 42vh; overflow-y: auto; }
   .question-meta { color: #778195; font-size: 12px; letter-spacing: .28em; text-transform: uppercase; margin-top: 10px; }
 
   .tag {
     border: 1px solid rgba(249, 87, 56, .4); border-radius: 999px; color: var(--orange);
-    padding: 7px 13px; font-size: 12px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase;
-    white-space: nowrap;
+    padding: 6px 12px; font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+    white-space: normal; text-align: right; max-width: 60%;
   }
 
   .question-card p { margin: 20px 0 0; border-top: 1px solid rgba(255, 255, 255, .07); padding-top: 18px; color: #94a3b8; font-size: 15px; }

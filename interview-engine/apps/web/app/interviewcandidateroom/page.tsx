@@ -239,7 +239,7 @@ export default function Interview() {
   }, [sessionId]);
 
   // --- Proctoring engine (all features) ---
-  const { videoRef, events, state, requestRequiredPermissions, startProctoringSession, endProctoringSession } = useProctoring(sessionId, socket, calibration);
+  const { videoRef, events, state, requestRequiredPermissions, startProctoringSession, endProctoringSession, getScreenAudioStream } = useProctoring(sessionId, socket, calibration);
 
   // --- Lock scroll to a fullscreen room while mounted ---
   useEffect(() => {
@@ -347,7 +347,14 @@ export default function Interview() {
   // required for tab-audio sharing). They pick the interview tab and tick
   // "Share tab audio" — that audio is the avatar's voice (the mic is not in it).
   async function enableAvatarCapture() {
-    const r = await transcript.startAvatarCapture();
+    // Reuse the audio already shared via the proctoring screen-share (single
+    // prompt). Only if that share carried no audio do we fall back to a
+    // dedicated getDisplayMedia prompt — so nothing breaks if the candidate
+    // skipped the "share audio" checkbox earlier.
+    const sharedAudio = getScreenAudioStream?.() ?? null;
+    const r = sharedAudio
+      ? transcript.startAvatarCaptureFromStream(sharedAudio)
+      : await transcript.startAvatarCapture();
     if (r.ok) {
       setAvatarCapture('on');
       setAvatarCaptureMsg('Interviewer voice is being recorded for transcription.');
@@ -658,14 +665,12 @@ export default function Interview() {
 
             <section className="question-card">
               <div className="question-top">
-                <div>
-                  <h2>{question.text}</h2>
-                  <div className="question-meta">
-                    {useLina ? 'Interviewer asked' : 'Question'} {String(qIdx + 1).padStart(2, '0')}/
-                    {String(qList.length).padStart(2, '0')}
-                  </div>
-                </div>
                 <div className="tag">{question.tag}</div>
+              </div>
+              <h2>{question.text}</h2>
+              <div className="question-meta">
+                {useLina ? 'Interviewer asked' : 'Question'} {String(qIdx + 1).padStart(2, '0')}/
+                {String(qList.length).padStart(2, '0')}
               </div>
               <p>{question.hint}</p>
               <div className="question-actions">
@@ -701,15 +706,20 @@ export default function Interview() {
           <div className="control-actions">
             <button
               type="button"
-              title={avatarCapture === 'on' ? avatarCaptureMsg : 'Capture the interviewer’s voice for the transcript (share this tab with audio)'}
+              title={
+                avatarCapture === 'on'
+                  ? avatarCaptureMsg || 'Capturing the interviewer’s voice ✓'
+                  : avatarCapture === 'error'
+                  ? avatarCaptureMsg || 'Interviewer audio not captured — click to retry'
+                  : 'Capture the interviewer’s voice for the transcript (share this tab with audio)'
+              }
               onClick={enableAvatarCapture}
               disabled={avatarCapture === 'on'}
               style={{
-                fontSize: 12, fontWeight: 700,
                 color: avatarCapture === 'on' ? '#34d399' : avatarCapture === 'error' ? '#f87171' : undefined,
               }}
             >
-              {avatarCapture === 'on' ? '🎧 Interviewer ✓' : '🎧 Capture interviewer'}
+              🎧
             </button>
             <button type="button" title="Microphone" onClick={toggleMic} className={micOn ? '' : 'muted'}>
               {micOn ? '🎙' : '🔇'}

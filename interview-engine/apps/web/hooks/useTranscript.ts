@@ -263,6 +263,27 @@ export function useTranscript(sessionId: string) {
     }
   }, [recordOneSegment]);
 
+  // Same as startAvatarCapture, but records from an audio stream we ALREADY have
+  // (the audio track siphoned off the proctoring screen-share). This avoids a
+  // second getDisplayMedia prompt — the candidate only shares their screen once.
+  // Falls back to startAvatarCapture (a dedicated prompt) if no audio is given.
+  const startAvatarCaptureFromStream = useCallback(
+    (audioStream: MediaStream | null): { ok: boolean; reason?: string } => {
+      if (avatarActiveRef.current) return { ok: true };
+      const audioTracks = audioStream?.getAudioTracks() ?? [];
+      if (!audioTracks.length) {
+        return { ok: false, reason: 'No audio was shared. Re-share your screen and CHECK the "Share system/tab audio" box.' };
+      }
+      const audio = new MediaStream(audioTracks);
+      avatarStreamRef.current = audio;
+      avatarActiveRef.current = true;
+      audioTracks[0].addEventListener('ended', () => { avatarActiveRef.current = false; });
+      recordOneSegment(audio);
+      return { ok: true };
+    },
+    [recordOneSegment],
+  );
+
   // Stop avatar capture: end the current segment (which uploads it) and release
   // the shared stream. Returns the last upload result (or null).
   const stopAvatarCapture = useCallback(async (): Promise<any> => {
@@ -300,6 +321,7 @@ export function useTranscript(sessionId: string) {
     startBrowserSTT,
     stopBrowserSTT,
     startAvatarCapture,
+    startAvatarCaptureFromStream,
     stopAvatarCapture,
   };
 }

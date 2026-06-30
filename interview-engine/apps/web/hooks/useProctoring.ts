@@ -216,6 +216,11 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
 
   const screenStreamRef = useRef<MediaStream | null>(null);
+  // Audio track siphoned off the SAME screen-share prompt (the avatar's voice
+  // plays through the tab/system). Kept separate so the proctoring video
+  // recorder stays video-only and unchanged; consumed by the transcript hook
+  // so we never fire a second getDisplayMedia prompt to capture the interviewer.
+  const screenAudioStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const activeMetaRef = useRef<ActiveViolationRecordingMeta | null>(null);
@@ -240,6 +245,8 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
+    screenAudioStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenAudioStreamRef.current = null;
     setHasScreenSharePermission(false);
   }, []);
 
@@ -263,11 +270,22 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
           height: { ideal: 720 },
           displaySurface: 'monitor',
         } as MediaTrackConstraints,
-        audio: false,
+        // Also request audio on this SAME prompt so a single share can capture
+        // the interviewer's voice (avatar audio routes through the tab/system)
+        // for transcription — eliminating a second getDisplayMedia prompt. Clean
+        // audio (no AEC/AGC) for STT. If the candidate doesn't tick "share
+        // audio", no audio track arrives and we simply fall back to a dedicated
+        // prompt later (nothing here breaks).
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } as any,
       });
 
       stopScreenShare();
-      screenStreamRef.current = stream;
+
+      // Keep the proctoring recorder VIDEO-ONLY (unchanged behavior); siphon any
+      // shared audio into a separate stream for interviewer-voice transcription.
+      const audioTracks = stream.getAudioTracks();
+      screenAudioStreamRef.current = audioTracks.length ? new MediaStream(audioTracks) : null;
+      screenStreamRef.current = new MediaStream(stream.getVideoTracks());
       setHasScreenSharePermission(true);
 
       const [videoTrack] = stream.getVideoTracks();
@@ -275,6 +293,8 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
         videoTrack.onended = () => {
           setHasScreenSharePermission(false);
           screenStreamRef.current = null;
+          screenAudioStreamRef.current?.getTracks().forEach((t) => t.stop());
+          screenAudioStreamRef.current = null;
           onScreenShareStopped?.();
         };
       }
@@ -441,12 +461,18 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     };
   }, [clearTimer]);
 
+  // Returns the audio MediaStream siphoned off the screen share (or null if the
+  // candidate didn't share audio). Consumed by the transcript hook so the
+  // interviewer's voice is captured from the existing share — no second prompt.
+  const getScreenAudioStream = useCallback(() => screenAudioStreamRef.current, []);
+
   return {
     hasScreenSharePermission,
     isRecordingViolation,
     screenShareError,
     requestScreenShare,
     stopScreenShare,
+    getScreenAudioStream,
     startViolationRecording,
     stopViolationRecording,
     recordViolationClip,
@@ -3310,6 +3336,7 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     requestScreenShareBeforeInterview,
     requestScreenShare: violationScreenRecorder.requestScreenShare,
     stopScreenShare: violationScreenRecorder.stopScreenShare,
+    getScreenAudioStream: violationScreenRecorder.getScreenAudioStream,
     hasScreenSharePermission: violationScreenRecorder.hasScreenSharePermission,
     isRecordingViolation: violationScreenRecorder.isRecordingViolation,
     screenShareError: violationScreenRecorder.screenShareError,
