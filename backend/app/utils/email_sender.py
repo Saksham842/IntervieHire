@@ -1,3 +1,4 @@
+import os
 import smtplib
 import logging
 import base64
@@ -7,6 +8,16 @@ from email.mime.multipart import MIMEMultipart
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _smtp_blocked() -> bool:
+    """Railway (and similar PaaS) block outbound SMTP: `smtplib.SMTP()` to
+    gmail:587 fails with "[Errno 101] Network is unreachable" and, with no
+    timeout, can stall the whole request (e.g. POST /schedule hangs on the
+    invite send). When running on Railway we skip the direct SMTP send entirely
+    — interview invites are delivered by Google Calendar (sendUpdates='all').
+    """
+    return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_ENVIRONMENT_NAME"))
 
 def send_email_via_resend(to_email: str, subject: str, html_content: str, attachment_content: str | None = None, attachment_name: str | None = None, from_override: str | None = None) -> bool:
     if not settings.RESEND_API_KEY:
@@ -72,8 +83,11 @@ def send_html_email(to_email: str, subject: str, html_content: str, from_email: 
         msg.attach(MIMEText(plain_content, 'plain'))
     msg.attach(MIMEText(html_content, 'html'))
 
+    if _smtp_blocked():
+        logger.info(f"SMTP blocked on this host (Railway) — skipping direct send to {to_email} (invite is delivered via Google Calendar).")
+        return True
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
             server.starttls()
             server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
             server.sendmail(sender, to_email, msg.as_string())
@@ -454,8 +468,11 @@ def send_ical_invitation_email(
     part_cal.add_header('Content-Class', 'urn:content-classes:calendarmessage')
     msg.attach(part_cal)
 
+    if _smtp_blocked():
+        logger.info(f"SMTP blocked on this host (Railway) — skipping iCal email to {candidate_email} (invite is delivered via Google Calendar).")
+        return True
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
             server.starttls()
             server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
             server.sendmail(settings.SMTP_FROM or "hr@interviehire.com", candidate_email, msg.as_string())
