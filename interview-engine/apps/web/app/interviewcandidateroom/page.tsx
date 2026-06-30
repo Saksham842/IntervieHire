@@ -322,13 +322,22 @@ export default function Interview() {
         // message and stop instead of proceeding into a broken room.
         const startTokenQS = inviteTokenRef.current ? `?token=${encodeURIComponent(inviteTokenRef.current)}` : '';
         const startRes = await fetch(`${API_URL}/api/interview/sessions/${sessionId}/start${startTokenQS}`, { method: 'POST' });
-        if (!startRes.ok) {
+        // Hard-block ONLY on a 4xx recruiter-policy gate (disabled / late /
+        // no-reattempt / CV-required / invalid invite). On a 5xx or network
+        // error, log and PROCEED into the interview instead of trapping the
+        // candidate behind "Internal Server Error" — the room still runs on its
+        // synced/blueprint questions, and a transient engine/session error must
+        // not block a legitimately scheduled candidate.
+        if (startRes.status >= 400 && startRes.status < 500) {
           let msg = 'This interview could not be started.';
           try { const j = await startRes.json(); if (j?.error) msg = j.error; } catch { /* keep default */ }
           setStartError(msg);
           try { endProctoringSession(); } catch { /* noop */ }
           setRecordingStatus('');
           return;
+        }
+        if (!startRes.ok) {
+          console.error(`Engine /start returned ${startRes.status}; proceeding into the interview anyway.`);
         }
         startRecording();
         // Begin transcript capture: mark t=0 and stream candidate speech via the
