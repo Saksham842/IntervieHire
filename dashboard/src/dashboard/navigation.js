@@ -19,6 +19,7 @@ import { renderKanbanBoard, resetWaveformAudio, startSwarmLogs } from './kanban-
 import { renderTalentFinderPane } from './talent-finder-panel.js';
 import { renderAnalyticsTable, renderJobCards, renderTeamTable, hydrateUsageAnalytics } from './render-views.js';
 import { soundEngine } from './sound.js';
+import { syncSettingsControls } from './settings-page.js';
 import { AppState, generateJobId } from './state.js';
 import { pushUrl } from './url-sync.js';
 import { isApiMode, apiCreateJob, apiPatchJobParameters } from './api.js';
@@ -370,6 +371,7 @@ function navigateToSubtab(subtabId) {
     mainTitle.textContent = 'General Settings';
     subText.textContent = 'Manage your account, notifications, and preferences';
     document.getElementById('view-settings-general').classList.add('active-view');
+    syncSettingsControls();
     soundEngine.playChime([261.63, 293.66, 329.63], 0.1, 0.08);
   }
 }

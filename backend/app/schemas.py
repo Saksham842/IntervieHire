@@ -60,8 +60,17 @@ class UpdateMemberIn(BaseModel):
 class ChangePasswordIn(BaseModel):
     current_password: str
     new_password: str
- 
- 
+
+
+class ChangeEmailIn(BaseModel):
+    new_email: EmailStr
+    current_password: str
+
+
+class DeleteAccountIn(BaseModel):
+    current_password: str
+
+
 # ─── ORGANISATION ────────────────────────────────────────────────────────────
  
 class OrganisationOut(BaseModel):

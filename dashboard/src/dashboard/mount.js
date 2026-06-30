@@ -22,6 +22,7 @@ import { renderSpotlightResults, SpotlightCommands, spotlightUi, toggleSpotlight
 import { AppState, generateJobId } from './state.js';
 import { apiCreateJob, apiPatchJobParameters, apiDeleteJob, apiUpdateJobStatus, apiSetJobListed, apiDuplicateJob, apiPatchJobSettings, apiGetOrganisation, apiUpdateOrganisation, apiInviteMember, isApiMode, getDataSource } from './api.js';
 import { initOrgSwitcher } from './org-switcher.js';
+import { initSettingsPage, syncSettingsControls } from './settings-page.js';
 
 // ==========================================
 // COMPONENT MOUNT BINDINGS
@@ -37,6 +38,9 @@ function initMountBindings() {
   // it once /me has set the role globals, and try once now (no-op until known).
   window.__ihInitOrgSwitcher = initOrgSwitcher;
   initOrgSwitcher();
+  // Lets DashboardShell refresh the settings email/toggles once /me sets the globals,
+  // even when the settings view is already open on initial load.
+  window.__ihSyncSettings = syncSettingsControls;
 
   // Sidebar Collapse Toggle
   const toggleSidebarBtn = document.getElementById('btn-toggle-sidebar');
@@ -931,37 +935,9 @@ function initMountBindings() {
     });
   }
 
-  document.querySelectorAll('.settings-toggle:not([style*="pointer-events"])').forEach(toggle => {
-    toggle.addEventListener('click', () => {
-      toggle.classList.toggle('active');
-      soundEngine.playClick();
-      showPremiumToast('Setting updated.', 'success');
-    });
-  });
-
-  const btnChangePass = document.getElementById('btn-change-password');
-  if (btnChangePass) {
-    btnChangePass.addEventListener('click', () => {
-      soundEngine.playClick();
-      showPremiumToast('Password change dialog would open here.', 'info');
-    });
-  }
-
-  const btnExportData = document.getElementById('btn-export-data');
-  if (btnExportData) {
-    btnExportData.addEventListener('click', () => {
-      soundEngine.playClick();
-      showPremiumToast('Data export started. You will receive an email shortly.', 'success');
-    });
-  }
-
-  const btnDeleteAccount = document.getElementById('btn-delete-account');
-  if (btnDeleteAccount) {
-    btnDeleteAccount.addEventListener('click', () => {
-      soundEngine.playClick();
-      showPremiumToast('Account deletion requires email confirmation.', 'info');
-    });
-  }
+  // General Settings page — wire every control to a real action (modals → backend,
+  // sound/theme/preference toggles, client-side data export). See settings-page.js.
+  initSettingsPage();
 
   // I. Exports Buttons Bindings
   document.getElementById('btn-export-jobs')?.addEventListener('click', () => {

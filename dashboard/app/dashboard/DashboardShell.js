@@ -169,9 +169,13 @@ export default function DashboardShell({ children }) {
 
     const firstName = label.split(/\s+/)[0] || label;
     window.IH_USER_NAME = firstName;
+    window.IH_USER_EMAIL = user.email || '';
     window.IH_ORG_NAME = (user.organisation_name || '').trim();
     window.IH_USER_TYPE = user.user_type || 'member';
     window.IH_ACTIVE_ORG_ID = user.organisation_id || null;
+    // Refresh the settings page's email/toggles now that the profile is known (covers
+    // the case where the settings view is already open on initial load).
+    if (typeof window.__ihSyncSettings === 'function') window.__ihSyncSettings();
     // Globals are set — (re)build the super-admin org switcher now that the role
     // is known. Guarded: the vanilla engine registers this once mount.js runs.
     if (typeof window.__ihInitOrgSwitcher === 'function') window.__ihInitOrgSwitcher();

@@ -656,7 +656,7 @@ export const html = `
                 <div class="settings-row">
                   <div class="settings-row-info">
                     <span class="settings-row-label">Email Address</span>
-                    <span class="settings-row-hint">vanshmalik6606@gmail.com</span>
+                    <span class="settings-row-hint" id="settings-email-value">—</span>
                   </div>
                   <button class="settings-btn-action" id="btn-change-email">Change</button>
                 </div>
@@ -666,13 +666,6 @@ export const html = `
                     <span class="settings-row-hint">Last changed 30 days ago</span>
                   </div>
                   <button class="settings-btn-action" id="btn-change-password">Update Password</button>
-                </div>
-                <div class="settings-row">
-                  <div class="settings-row-info">
-                    <span class="settings-row-label">Two-Factor Authentication</span>
-                    <span class="settings-row-hint">Add an extra layer of security to your account</span>
-                  </div>
-                  <div class="settings-toggle" id="toggle-2fa"></div>
                 </div>
               </div>
 

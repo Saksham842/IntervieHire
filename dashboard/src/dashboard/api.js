@@ -84,6 +84,20 @@ export async function apiPatchJobSettings(id, fields) {
   return request(`/jobs/${id}/settings`, { method: 'PATCH', body: fields });
 }
 
+// ── Account & Security (General Settings page) ──────────────────────────────
+// All operate on the authenticated caller; the backend re-verifies the current
+// password before mutating (see backend/app/routers/settings.py).
+export async function apiChangePassword(currentPassword, newPassword) {
+  return request('/settings/password', { method: 'PUT', body: { current_password: currentPassword, new_password: newPassword } });
+}
+export async function apiChangeEmail(newEmail, currentPassword) {
+  return request('/settings/email', { method: 'PUT', body: { new_email: newEmail, current_password: currentPassword } });
+}
+// Permanently deletes the signed-in user's account (backend clears the auth cookie).
+export async function apiDeleteAccount(currentPassword) {
+  return request('/settings/account', { method: 'DELETE', body: { current_password: currentPassword } });
+}
+
 // ── Organisation ───────────────────────────────────────────────────────────
 // The org profile carries the career page config (career_subdomain, career_intro).
 export async function apiGetOrganisation() {

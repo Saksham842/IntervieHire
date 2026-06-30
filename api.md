@@ -10,6 +10,7 @@
 - **2026-06-30** — Durable super_admin active-organisation memory via the new internal `users.last_active_org_id` column (`backend/app/routers/auth.py`, `backend/app/utils/auth.py` `get_active_org_id`). **NO request/response schema fields changed** — `last_active_org_id` is internal only and appears in NO `*Out` Pydantic model; only the behavior/prose of four `/api/auth` routes changed. **POST /api/auth/login** no longer clobbers an existing super_admin `active_org_id` selection: the cookie is set only when a target resolves, by precedence (1) the `active_org_id` cookie already on the request, else (2) the user's stored `users.last_active_org_id`, else (3) a deterministic first org `ORDER BY created_at ASC, id ASC` (previously it unconditionally overwrote the cookie with an arbitrary `Organisation.first()` on every login, which made the wrong org reappear). **POST /api/auth/switch-context** now ALSO persists the chosen org to `users.last_active_org_id` (server-side `db.commit()`) so the selection survives cookie loss and future logins. **GET /api/auth/organisations** now returns the list `ORDER BY org_name` (was unordered). **GET /api/auth/me** / the shared `get_active_org_id` helper now resolve the super_admin org via the fallback chain `active_org_id` cookie → `users.last_active_org_id` → the super_admin's own `organisation_id` → deterministic first org (`ORDER BY created_at ASC, id ASC`) (was cookie → arbitrary `.first()`).
 - **2026-06-30** — Restructured the `UsageStatsOut` response schema of **GET /api/usage/stats** (`backend/app/routers/usage.py`, `backend/app/schemas.py`) for the Usage Overview cards — request/auth UNCHANGED. REMOVED `int` field `scheduled` (was a Card-1 entry-route bucket). **Card 1 (Total Applicants)** now counts by **`entry_method`** (`career_page`/`bulk_upload`/`direct_link`/`ats`, else `other`) — i.e. how the candidate was actually added — instead of the internal stage-router field `source`; `other` absorbs NULL/functional/any unlisted method and the five buckets reconcile to `total_applicants`. ADDED four `int` fields: `screening_not_scheduled`, `screening_rejected`, `functional_not_scheduled`, `functional_rejected`. **Card 3 (Recruiter Screening)** and **Card 4 (Functional Interview)** pills are now a 5-way precedence partition over the candidates who reached that stage, so the five pills SUM to the stage headline (`screening_reached` / `functional_reached`): screening = Advanced (`screening_advanced`, = reached functional) → Rejected (`decision == "rejected"`) → Attempted → Scheduled → Not Scheduled; functional = Hired (`decision == "hired"`) → Rejected → Attempted → Scheduled → Not Scheduled. `screening_attempted` now means recruiter feedback is present (`recruiter_screening` not null OR `recruiter_screening_score` not null), NOT `screening_status == "completed"` (nothing ever writes that value); `functional_attempted` still means `functional_status == "completed"` (set by the engine webhook). `resume_*` fields and **GET /api/usage/candidates-table** are unchanged.
 - **2026-06-30** — Modified the `UsageStatsOut` response schema of **GET /api/usage/stats** (`backend/app/routers/usage.py`, `backend/app/schemas.py`) — request/auth UNCHANGED. RENAMED four `int` response fields: `resume_shortlisted` → `resume_advanced`, `resume_waitlisted` → `resume_rejected`, `screening_shortlisted` → `screening_advanced`, `functional_shortlisted` → `functional_hired` (all other fields unchanged). NEW semantics: `resume_analysed` = `resume_reached` (count reaching the resume stage; ≥ `resume_advanced`); `resume_advanced` = `screening_reached` (advanced from resume into screening); `resume_rejected` = analysed at resume but NOT advanced to screening AND (`decision == "rejected"` OR the applicant's `resume_waitlisted` flag is set); `screening_advanced` = `functional_reached` (advanced from screening into functional); `functional_hired` = `decision == "hired"`. Also, **test-session applicants** (`remarks == "__ih_test_session__"`) are now EXCLUDED from BOTH **GET /api/usage/stats** AND **GET /api/usage/candidates-table** (mirrors the funnel/roster/analytics exclusion in `jobs.py`); the `candidates-table` request/response schema is otherwise unchanged.
+- **2026-06-30** — Account settings expanded (`backend/app/routers/settings.py`, mounted at `/api/settings`). Added **PUT /api/settings/email** (+ identical **POST /api/settings/email** alias) — change the signed-in user's email; requires `current_password` (verified against the stored bcrypt hash), normalizes the new email (strip + lowercase), short-circuits with "Email unchanged" when it equals the current address, and enforces the unique-email constraint with a friendly 400 ("That email is already in use by another account") instead of a 500. Added **DELETE /api/settings/account** — permanently delete the signed-in user's account; requires `current_password`, then FK-safe teardown: deletes the caller's `job_collaborators` rows, nulls `jobs.created_by_id` for jobs they created (org keeps the job), deletes the user row, and clears the `token` and `active_org_id` cookies on the response. Both new routes require auth (`token` httpOnly cookie) and operate only on the authenticated caller. New request schemas `ChangeEmailIn` (`new_email: EmailStr`, `current_password: str`) and `DeleteAccountIn` (`current_password: str`) in `app/schemas.py`. The existing **PUT/POST /api/settings/password** routes are unchanged (documented for completeness).
 - **2026-06-30** — **POST /api/jobs/{job_id}/test-session** (`backend/app/routers/jobs.py`): the throwaway test-interview applicant's `name` now derives from the authenticated user (`tester_name = current_user.name` stripped, falling back to "Test Candidate" when empty/blank) instead of a hardcoded "Test Candidate", and is applied on BOTH create (new test applicant) AND reuse (an existing `remarks='__ih_test_session__'`-tagged applicant has its `name` refreshed to `tester_name` each call). Everything else unchanged — still tagged/excluded from funnel/roster/responses/analytics, `source=direct_link`, resets `functional_status=scheduled`/`functional_scheduled_at` to one minute ago, calls `sync_applicant_to_ai`. Auth and request/response schemas (success `{ "session_id": str }`; 500 on falsy sync) are unchanged.
 - **2026-06-28** — Self-serve expired-link re-request + auto-revoke on rejection (round 4). **Backend** (`backend/app/routers/invites.py`): added **POST /i/{token}/request-new** (PUBLIC — no auth; mounted at root via `public_link_router`, NOT under `/api`) — a candidate whose link has expired requests a fresh one, emailed to the SAME address. Rate-limited per client IP (5 requests / 300 s → 429). Behavior: invite not found → 404 (text/html); `status == completed` → 410 (text/html, "a new link can't be issued"); otherwise mints a fresh invite for the same candidate (applicant-bound → re-provisions via the shared `_provision_invite_for_applicant` incl. stage provisioning, engine-session sync, and token binding; standalone → `create_invite`) and EMAILS it; internal failure → 500 (text/html); success → 200 (text/html confirmation page, "We've emailed a fresh interview link to j***@domain…"). All responses are text/html. Modified **GET /i/{token}** — the 410 EXPIRED error page now renders an "Email me a new link" button that POSTs to `/i/{token}/request-new`; the COMPLETED 410 page does NOT (completed interviews can't be re-issued). Request/response otherwise unchanged. **Backend** (`backend/app/routers/jobs.py`): **PATCH /api/jobs/applicants/{applicant_id}** — when the update sets the applicant's `decision == "rejected"`, it now AUTO-REVOKES that candidate's live interview links: all pending/started `interview_invites` rows are set to expired, AND the engine's `InterviewSession.inviteToken` is rotated to a fresh, never-shared value so any saved room URL stops working. Request/response schema is otherwise UNCHANGED.
 - **2026-06-27** — Bulk per-applicant invites + job-scoped listing + post-start token enforcement (round 3). **Backend** (`backend/app/routers/invites.py`): added **POST /api/invites/applicants** (auth — bulk-mint per-applicant invites, e.g. "invite all shortlisted"; reuses the same per-applicant provisioning as POST /api/invites via the shared `_provision_invite_for_applicant` helper — stage provisioning, engine session sync, token binding, optional email; per-applicant failures (test applicant, no email, invalid id, access denied) are collected in `errors` instead of aborting the batch). Modified **GET /api/invites** — now accepts EITHER `applicant_id` OR `job_id` query param (exactly one required; was applicant_id-only); with `job_id` it returns all invites for that job (auth via `_verify_job_access`), and each `invites[]` row now also includes `"applicant_id": string|null`. 400 if neither param is supplied (or an invalid UUID). **Interview Engine** (Fastify `interview.routes.ts`): the post-start session routes — **POST /api/interview/sessions/:id/answers**, **POST /api/interview/sessions/:id/complete**, **POST /api/interview/sessions/:id/evaluate** — now enforce the per-candidate invite token (defense-in-depth on the post-start path via the shared `blockedByInviteToken` helper): each accepts an optional `token` query param and returns 403 `{ "error": "This interview link is invalid or has expired.", "code": "INVALID_TOKEN" }` when the session has a non-null `inviteToken` and `token` doesn't match; token-free sessions are unaffected and request/response bodies are otherwise unchanged.
@@ -1434,6 +1435,94 @@ No response_model; default 200 application/json.
 Status codes: 200 OK; 400 "No password is set for this account; use account recovery instead." OR "Current password is incorrect"; 404 "User not found"; 401 missing/invalid JWT cookie; 422 body validation failure.
 
 Notes: Implementation is `return change_password(data, current_user, db)` — fully identical semantics to the PUT route.
+
+#### PUT /api/settings/email
+
+Change the authenticated user's email. Requires the current password, verifies against the stored bcrypt hash, normalizes the new email (strip + lowercase), and enforces the unique-email constraint before persisting.
+
+- **Auth:** JWT httpOnly cookie (required). No role gate — operates only on the authenticated caller.
+- **Path params:** none
+- **Query params:** none
+
+Request:
+```json
+{
+  "new_email": "string, EmailStr format (required)",
+  "current_password": "string (required)"
+}
+```
+Pydantic model `ChangeEmailIn`: new_email: EmailStr; current_password: str.
+
+Response:
+```json
+{
+  "message": "Email updated successfully",
+  "email": "string"
+}
+```
+When the normalized new email equals the caller's current email, returns `{ "message": "Email unchanged", "email": "string" }` instead (still 200, no DB write). Plain dict (default 200, application/json). No response_model.
+
+Status codes: 200 OK; 400 Bad Request — "No password is set for this account; use account recovery instead." (hashed_password falsy) OR "Current password is incorrect" OR "That email is already in use by another account"; 404 Not Found — "User not found"; 401 Unauthorized — missing/invalid JWT cookie; 422 Unprocessable Entity — body validation failure (including a malformed `new_email`).
+
+Notes: Loads user fresh via db.query(User).filter(User.id == current_user.id).first(). new_email is `str(data.new_email).strip().lower()`. Uniqueness checked against other users only (`User.email == new_email, User.id != user.id`). On success sets user.email = new_email and commits.
+
+#### POST /api/settings/email
+
+Alias for PUT /api/settings/email. Delegates directly to change_email(...), so behavior is identical.
+
+- **Auth:** JWT httpOnly cookie (required). No role gate.
+- **Path params:** none
+- **Query params:** none
+
+Request:
+```json
+{
+  "new_email": "string, EmailStr format (required)",
+  "current_password": "string (required)"
+}
+```
+Pydantic model `ChangeEmailIn`.
+
+Response:
+```json
+{
+  "message": "Email updated successfully",
+  "email": "string"
+}
+```
+Or `{ "message": "Email unchanged", "email": "string" }` when the new email equals the current one. No response_model; default 200 application/json.
+
+Status codes: 200 OK; 400 "No password is set for this account; use account recovery instead." OR "Current password is incorrect" OR "That email is already in use by another account"; 404 "User not found"; 401 missing/invalid JWT cookie; 422 body validation failure.
+
+Notes: Implementation is `return change_email(data, current_user, db)` — fully identical semantics to the PUT route.
+
+#### DELETE /api/settings/account
+
+Permanently delete the authenticated user's account. Requires the current password, then performs an FK-safe teardown and clears the auth cookies on the response.
+
+- **Auth:** JWT httpOnly cookie (required). No role gate — operates only on the authenticated caller.
+- **Path params:** none
+- **Query params:** none
+
+Request (body is sent on the DELETE):
+```json
+{
+  "current_password": "string (required)"
+}
+```
+Pydantic model `DeleteAccountIn`: current_password: str.
+
+Response:
+```json
+{
+  "message": "Account deleted"
+}
+```
+Plain dict (default 200, application/json). No response_model. On success the response also clears the `token` and `active_org_id` cookies (`delete_cookie(..., path="/")`).
+
+Status codes: 200 OK; 400 Bad Request — "No password is set for this account; use account recovery instead." (hashed_password falsy) OR "Current password is incorrect"; 404 Not Found — "User not found"; 401 Unauthorized — missing/invalid JWT cookie; 422 Unprocessable Entity — body validation failure.
+
+Notes: Loads user fresh via db.query(User).filter(User.id == current_user.id).first(). FK-safe teardown (committed in one transaction): deletes the caller's `job_collaborators` rows (`JobCollaborator.user_id == user.id`, NOT NULL FK), nulls `jobs.created_by_id` for jobs the user created (`Job.created_by_id == user.id` → None, nullable FK so the org keeps the job), then `db.delete(user)`. After commit, clears the `token` and `active_org_id` cookies so the now-deleted session can't linger.
 
 ### `backend/app/routers/deepseek.py`
 
