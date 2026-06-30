@@ -215,6 +215,80 @@ const hasFunctional = (c) => c.interviewStatus === 'Completed' && Number.isFinit
 const hasResume = (c) => !!c.resumeAnalysis || c.matchScore != null;
 const hasScreening = (c) => !!c.recruiterScreening || c.recruiterScreeningScore != null;
 
+// ── R / S / F funnel chips ──────────────────────────────────────────────────
+// Each hiring stage (Resume → Screening → Functional) resolves to one state:
+//   'pass'   (green)  — stage cleared; the candidate moved on / wasn't stopped here
+//   'reject' (red)    — the candidate was stopped at this stage; later stages never ran
+//   'active' (yellow) — this stage is the candidate's current frontier (in progress / awaiting)
+//   'idle'   (grey)   — stage not reached yet (or skipped)
+// Two cascade rules make the row read like a funnel: advancing past a stage forces
+// the earlier ones green (you cleared them to get there), and a rejection greys out
+// every stage after it (those never happened). So a resume-rejected candidate reads
+// R red · S grey · F grey, exactly as the recruiter sees the pipeline.
+const STAGE_STATE_STYLE = {
+  pass: { color: '#34d399', bg: 'rgba(52,211,153,.16)', border: 'rgba(52,211,153,.45)', tip: 'cleared' },
+  reject: { color: '#f87171', bg: 'rgba(248,113,113,.16)', border: 'rgba(248,113,113,.45)', tip: 'rejected' },
+  active: { color: '#fbbf24', bg: 'rgba(251,191,36,.18)', border: 'rgba(251,191,36,.5)', tip: 'in progress' },
+  idle: { color: '#94a3b8', bg: 'rgba(148,163,184,.12)', border: 'rgba(148,163,184,.3)', tip: 'not reached' },
+};
+
+function deriveStageStates(c) {
+  const inList = (v, arr) => arr.indexOf(v) !== -1;
+
+  // Per-stage raw signals off the candidate object (see mapApplicantOutToCandidate).
+  const resumeAnalyzed = !!c.resumeAnalysis || c.matchScore != null || c.resumeShortlisted != null || !!c.resumeAnalysed;
+  const resumeRejected = c.resumeShortlisted === false || (c.resumeAnalysis && c.resumeAnalysis.recommendation === 'Reject');
+
+  const screeningCompleted = c.screeningStatus === 'Completed' || !!c.recruiterScreening || c.recruiterScreeningScore != null;
+  const screeningActive = inList(c.screeningStatus, ['Attempting', 'Evaluating']);
+  const screeningRejected = c.recruiterScreening === 'Poor fit' || c.screeningStatus === 'Slot Missed';
+
+  // A finite functional score is only minted post-interview by the eval engine, so a
+  // present score means "scored/passed" even if functional_status is null or a
+  // non-standard value mapInterviewStatus didn't normalise to 'Completed'. Using OR
+  // (not AND) keeps the chip green in that case instead of falsely reading "in progress".
+  const functionalCompleted = c.interviewStatus === 'Completed' || Number.isFinite(c.interviewScore);
+  const functionalActive = inList(c.interviewStatus, ['Attempting', 'Evaluating']);
+  const functionalRejected = c.interviewStatus === 'Slot Missed';
+
+  // How far down the funnel the candidate actually got. 'Hired' is intentionally
+  // excluded here so a candidate hired off an earlier stage doesn't show a phantom
+  // (yellow) later stage they never attended.
+  const reachedFunctional = functionalCompleted || functionalActive || functionalRejected
+    || c.interviewStatus === 'Incomplete' || c.status === 'Functional';
+  const reachedScreening = reachedFunctional || screeningCompleted || screeningActive || screeningRejected
+    || c.status === 'Screening' || c.decision === 'shortlisted';
+
+  const overallRejected = c.decision === 'rejected' || c.status === 'Rejected';
+
+  let resume = 'idle';
+  let screening = 'idle';
+  let functional = 'idle';
+
+  // RESUME — advancing past it wins over its own signal.
+  if (reachedScreening) resume = 'pass';
+  else if (resumeRejected || (overallRejected && !reachedScreening)) resume = 'reject';
+  else if (resumeAnalyzed) resume = 'pass';
+  else if (c.status === 'Resume') resume = 'active';
+
+  // SCREENING — only meaningful once the funnel reaches it.
+  if (reachedScreening) {
+    if (reachedFunctional) screening = 'pass';
+    else if (screeningRejected || overallRejected) screening = 'reject';
+    else if (screeningCompleted) screening = 'pass';
+    else screening = 'active';
+  }
+
+  // FUNCTIONAL — only meaningful once the funnel reaches it.
+  if (reachedFunctional) {
+    if (functionalRejected || overallRejected) functional = 'reject';
+    else if (functionalCompleted) functional = 'pass';
+    else functional = 'active';
+  }
+
+  return { resume, screening, functional };
+}
+
 // Deep Analysis now holds ALL THREE result blocks per candidate (resume, screening,
 // functional), so the roster includes anyone with at least one result — not just
 // candidates who finished the interview (which left the tab empty pre-interview).
@@ -412,8 +486,11 @@ function rosterMarkup(job, reports) {
 function rosterRow({ candidate, report }, i) {
   const reco = RECO_META[report.recommendation] || RECO_META.hold;
   const s = report.overallScore;
-  const st = report.stages || {};
-  const dot = (on, label) => `<span title="${label}${on ? '' : ' — pending'}" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:10px;font-weight:700;background:${on ? 'rgba(45,212,191,.14)' : 'rgba(255,255,255,.04)'};color:${on ? '#2dd4bf' : '#6b6b6b'};border:1px solid ${on ? 'rgba(45,212,191,.35)' : 'rgba(255,255,255,.08)'};">${label[0]}</span>`;
+  const ss = deriveStageStates(candidate);
+  const dot = (state, label) => {
+    const v = STAGE_STATE_STYLE[state] || STAGE_STATE_STYLE.idle;
+    return `<span title="${label} — ${v.tip}" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:10px;font-weight:700;background:${v.bg};color:${v.color};border:1px solid ${v.border};">${label[0]}</span>`;
+  };
   return `
   <div class="da-row" data-action="select" data-cid="${candidate.id}" role="button" tabindex="0">
     <span class="da-rank">${i + 1}</span>
@@ -422,7 +499,7 @@ function rosterRow({ candidate, report }, i) {
       <span class="da-row-name">${escapeHTML(candidate.name)}</span>
       <span class="da-row-meta">${escapeHTML(candidate.source || 'Applicant')}</span>
     </div>
-    <span class="da-row-conf" title="Resume · Screening · Functional" style="display:inline-flex;gap:4px;">${dot(st.resume, 'Resume')}${dot(st.screening, 'Screening')}${dot(st.functional, 'Functional')}</span>
+    <span class="da-row-conf" title="Resume · Screening · Functional" style="display:inline-flex;gap:4px;">${dot(ss.resume, 'Resume')}${dot(ss.screening, 'Screening')}${dot(ss.functional, 'Functional')}</span>
     <span class="da-reco-chip" style="color:${reco.color};border-color:${reco.color}40;background:${reco.color}14;">${reco.label}</span>
     <span class="da-row-score" style="color:${s != null ? scoreColor(s) : '#9a9a9a'};">${s != null ? s : '—'}</span>
     <svg class="da-row-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>

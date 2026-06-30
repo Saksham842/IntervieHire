@@ -109,7 +109,12 @@ export async function initOrgSwitcher() {
   // Fetch the org list once, but re-render every init (the DOM may be fresh
   // after a remount, and the active selection can change).
   try {
-    if (!cachedOrgs) cachedOrgs = await apiListOrganisations();
+    if (!cachedOrgs) {
+      // Placeholder so a click during the first fetch opens "Loading…" rather than
+      // an empty box (a race-driven "sometimes" failure on initial load).
+      if (!menu.children.length) menu.innerHTML = '<div class="bulk-dd-item" style="opacity:0.6;cursor:default;">Loading…</div>';
+      cachedOrgs = await apiListOrganisations();
+    }
     renderOrgs(menu);
   } catch (err) {
     showPremiumToast((err && err.message) || 'Could not load organisations.', 'error');
