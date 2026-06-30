@@ -1334,6 +1334,56 @@ def update_job_settings(
     db.refresh(job)
     return _build_job_detail_out(job)
 
+
+@router.post("/{job_id}/duplicate", response_model=JobDetailOut)
+def duplicate_job(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    active_org_id: Optional[UUID] = Depends(get_active_org_id),
+    db: Session = Depends(get_db)
+):
+    """Deep-copy a job into a new, independent draft. Copies all job config plus a
+    full snapshot of every applicant (reports/scores/stage statuses intact). The
+    copy starts as draft/unlisted but is a real backend job, so it can be published
+    and edited like any other. Live single-use handles (scheduling_token,
+    calendar_event_id) are reset so the copy never shares a source's scheduling link
+    or calendar event."""
+    src = _verify_job_access(job_id, current_user, active_org_id, db)
+
+    # Copy every job column except identity, audit timestamps, and the fields we
+    # explicitly override below. Stored JSON-as-text columns copy verbatim.
+    job_skip = {"id", "title", "status", "is_job_listed", "custom_job_id",
+                "created_by_id", "created_at", "updated_at"}
+    job_data = {c.name: getattr(src, c.name)
+                for c in Job.__table__.columns if c.name not in job_skip}
+    new_job = Job(
+        **job_data,
+        title=f"{src.title} (Copy)",
+        status=JobStatus.draft,
+        is_job_listed=False,
+        custom_job_id=None,
+        created_by_id=current_user.id,
+    )
+    db.add(new_job)
+    db.flush()  # assign new_job.id before linking applicants/collaborator
+
+    # Mirror create_job: creator becomes a collaborator on the copy.
+    db.add(JobCollaborator(job_id=new_job.id, user_id=current_user.id))
+
+    # Full-state applicant snapshot. Copy every column except identity, linkage,
+    # audit timestamp, and live single-use external handles.
+    applicant_skip = {"id", "job_id", "created_at", "scheduling_token", "calendar_event_id"}
+    src_applicants = db.query(Applicant).filter(Applicant.job_id == src.id).all()
+    for a in src_applicants:
+        data = {c.name: getattr(a, c.name)
+                for c in Applicant.__table__.columns if c.name not in applicant_skip}
+        db.add(Applicant(**data, job_id=new_job.id))
+
+    db.commit()
+    db.refresh(new_job)
+    return _build_job_detail_out(new_job)
+
+
 @router.delete("/{job_id}")
 def delete_job(
     job_id: UUID,

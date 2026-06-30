@@ -20,7 +20,7 @@ import { soundEngine } from './sound.js';
 import { initSourcing, navigateToSourcing, showPremiumToast } from './sourcing.js';
 import { renderSpotlightResults, SpotlightCommands, spotlightUi, toggleSpotlightModal } from './spotlight.js';
 import { AppState, generateJobId } from './state.js';
-import { apiCreateJob, apiPatchJobParameters, apiDeleteJob, apiUpdateJobStatus, apiSetJobListed, apiGetOrganisation, apiUpdateOrganisation, apiInviteMember, isApiMode, getDataSource } from './api.js';
+import { apiCreateJob, apiPatchJobParameters, apiDeleteJob, apiUpdateJobStatus, apiSetJobListed, apiDuplicateJob, apiPatchJobSettings, apiGetOrganisation, apiUpdateOrganisation, apiInviteMember, isApiMode, getDataSource } from './api.js';
 import { initOrgSwitcher } from './org-switcher.js';
 
 // ==========================================
@@ -260,6 +260,21 @@ function initMountBindings() {
         break;
       }
       case 'duplicate': {
+        if (getDataSource() === 'api' && job._backend) {
+          // Real server-side deep copy: full config + a snapshot of all applicants.
+          // The returned job is _backend=true, so it persists and can be published.
+          try {
+            const dup = await apiDuplicateJob(job.id);
+            AppState.jobs.push(dup);
+            renderJobCards();
+            updateJobsCounters();
+            showPremiumToast(`Job duplicated as "${dup.cardName || dup.roleName}".`, 'success');
+          } catch (e) {
+            showPremiumToast(`Couldn't duplicate "${job.cardName || job.roleName}": ${(e && e.message) || 'backend error'}`, 'error');
+          }
+          break;
+        }
+        // Local / demo mode: client-side clone (no backend, applicants are local-only).
         const dup = JSON.parse(JSON.stringify(job));
         dup.id = 'JOB-' + Math.random().toString(36).substr(2, 8).toUpperCase();
         dup.cardName = (job.cardName || job.roleName) + ' (Copy)';
@@ -427,14 +442,29 @@ function initMountBindings() {
       showPremiumToast('Job name is required.', 'error');
       return;
     }
+    const prev = { cardName: job.cardName, customJobId: job.customJobId, tags: job.tags };
     job.cardName = nameVal;
     const idVal = document.getElementById('modal-edit-job-id').value.trim();
     if (idVal) job.customJobId = idVal;
     job.tags = [...editJobModalTags];
+    saveStateToLocalStorage();
     closeEditJobModal();
     renderJobCards();
     updateJobsCounters();
     showPremiumToast(`Job updated to "${nameVal}".`, 'success');
+    if (getDataSource() === 'api' && job._backend) {
+      // Persist the edit so it survives a refetch; roll back if the backend rejects it.
+      apiPatchJobSettings(job.id, { title: nameVal, custom_job_id: idVal || null, tags: [...editJobModalTags] })
+        .catch((e) => {
+          job.cardName = prev.cardName;
+          job.customJobId = prev.customJobId;
+          job.tags = prev.tags;
+          saveStateToLocalStorage();
+          renderJobCards();
+          updateJobsCounters();
+          showPremiumToast(`Couldn't save changes: ${(e && e.message) || 'backend error'}`, 'error');
+        });
+    }
     });
   }
 

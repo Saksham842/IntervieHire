@@ -55,6 +55,11 @@ export async function apiCreateJob(job) {
   };
   return mapJobOutToJob(await request('/jobs', { method: 'POST', body }));
 }
+// Server-side deep copy: full job config + a snapshot of all applicants. Returns
+// the mapped, _backend=true draft so it persists and can be published like any job.
+export async function apiDuplicateJob(id) {
+  return mapJobOutToJob(await request(`/jobs/${id}/duplicate`, { method: 'POST' }));
+}
 // Persist the authored blueprint — the exact JobParametersIn shape the backend
 // + ai_sync.py consume (functional_parameters carries questionsDetailed).
 export async function apiPatchJobParameters(id, job) {
@@ -73,6 +78,10 @@ export async function apiUpdateJobStatus(id, status) {
 // Toggle whether a job appears on the public career page (drives is_job_listed).
 export async function apiSetJobListed(id, listed) {
   return request(`/jobs/${id}/settings`, { method: 'PATCH', body: { is_job_listed: listed } });
+}
+// Persist basic posting fields (name → title, custom id, tags) edited via "Edit Posting".
+export async function apiPatchJobSettings(id, fields) {
+  return request(`/jobs/${id}/settings`, { method: 'PATCH', body: fields });
 }
 
 // ── Organisation ───────────────────────────────────────────────────────────

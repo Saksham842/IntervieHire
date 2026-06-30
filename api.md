@@ -6,6 +6,7 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-06-30** — Added **POST /api/jobs/{job_id}/duplicate** (`backend/app/routers/jobs.py`) — auth required; no request body; path param `job_id`:UUID; gated by `_verify_job_access` (404 if the job is not found or not in the caller's active org). Deep-copies the source job's config into a NEW independent job that is `status=draft` and `is_job_listed=false`, with `custom_job_id` reset to null and title suffixed " (Copy)"; also snapshots EVERY applicant (name/email/phone, resume data, all stage flags, screening/functional status+score, decision, report_url, scores) EXCEPT each copy's `scheduling_token` and `calendar_event_id` are reset to null (live single-use handles). The creator is added as a `JobCollaborator`. Returns 200 with a `JobDetailOut` body (same schema as **GET /api/jobs/{job_id}**). Also (NO schema change): **PATCH /api/jobs/{job_id}/settings** (`JobSettingsIn`) is now invoked by the dashboard "Edit Posting" flow to persist `title` / `custom_job_id` / `tags`.
 - **2026-06-30** — Durable super_admin active-organisation memory via the new internal `users.last_active_org_id` column (`backend/app/routers/auth.py`, `backend/app/utils/auth.py` `get_active_org_id`). **NO request/response schema fields changed** — `last_active_org_id` is internal only and appears in NO `*Out` Pydantic model; only the behavior/prose of four `/api/auth` routes changed. **POST /api/auth/login** no longer clobbers an existing super_admin `active_org_id` selection: the cookie is set only when a target resolves, by precedence (1) the `active_org_id` cookie already on the request, else (2) the user's stored `users.last_active_org_id`, else (3) a deterministic first org `ORDER BY created_at ASC, id ASC` (previously it unconditionally overwrote the cookie with an arbitrary `Organisation.first()` on every login, which made the wrong org reappear). **POST /api/auth/switch-context** now ALSO persists the chosen org to `users.last_active_org_id` (server-side `db.commit()`) so the selection survives cookie loss and future logins. **GET /api/auth/organisations** now returns the list `ORDER BY org_name` (was unordered). **GET /api/auth/me** / the shared `get_active_org_id` helper now resolve the super_admin org via the fallback chain `active_org_id` cookie → `users.last_active_org_id` → the super_admin's own `organisation_id` → deterministic first org (`ORDER BY created_at ASC, id ASC`) (was cookie → arbitrary `.first()`).
 - **2026-06-30** — Restructured the `UsageStatsOut` response schema of **GET /api/usage/stats** (`backend/app/routers/usage.py`, `backend/app/schemas.py`) for the Usage Overview cards — request/auth UNCHANGED. REMOVED `int` field `scheduled` (was a Card-1 entry-route bucket). **Card 1 (Total Applicants)** now counts by **`entry_method`** (`career_page`/`bulk_upload`/`direct_link`/`ats`, else `other`) — i.e. how the candidate was actually added — instead of the internal stage-router field `source`; `other` absorbs NULL/functional/any unlisted method and the five buckets reconcile to `total_applicants`. ADDED four `int` fields: `screening_not_scheduled`, `screening_rejected`, `functional_not_scheduled`, `functional_rejected`. **Card 3 (Recruiter Screening)** and **Card 4 (Functional Interview)** pills are now a 5-way precedence partition over the candidates who reached that stage, so the five pills SUM to the stage headline (`screening_reached` / `functional_reached`): screening = Advanced (`screening_advanced`, = reached functional) → Rejected (`decision == "rejected"`) → Attempted → Scheduled → Not Scheduled; functional = Hired (`decision == "hired"`) → Rejected → Attempted → Scheduled → Not Scheduled. `screening_attempted` now means recruiter feedback is present (`recruiter_screening` not null OR `recruiter_screening_score` not null), NOT `screening_status == "completed"` (nothing ever writes that value); `functional_attempted` still means `functional_status == "completed"` (set by the engine webhook). `resume_*` fields and **GET /api/usage/candidates-table** are unchanged.
 - **2026-06-30** — Modified the `UsageStatsOut` response schema of **GET /api/usage/stats** (`backend/app/routers/usage.py`, `backend/app/schemas.py`) — request/auth UNCHANGED. RENAMED four `int` response fields: `resume_shortlisted` → `resume_advanced`, `resume_waitlisted` → `resume_rejected`, `screening_shortlisted` → `screening_advanced`, `functional_shortlisted` → `functional_hired` (all other fields unchanged). NEW semantics: `resume_analysed` = `resume_reached` (count reaching the resume stage; ≥ `resume_advanced`); `resume_advanced` = `screening_reached` (advanced from resume into screening); `resume_rejected` = analysed at resume but NOT advanced to screening AND (`decision == "rejected"` OR the applicant's `resume_waitlisted` flag is set); `screening_advanced` = `functional_reached` (advanced from screening into functional); `functional_hired` = `decision == "hired"`. Also, **test-session applicants** (`remarks == "__ih_test_session__"`) are now EXCLUDED from BOTH **GET /api/usage/stats** AND **GET /api/usage/candidates-table** (mirrors the funnel/roster/analytics exclusion in `jobs.py`); the `candidates-table` request/response schema is otherwise unchanged.
@@ -457,6 +458,25 @@ Response:
 Status codes: 200 OK; 401 not authenticated; 403 'Access denied'; 404 'Job not found'.
 
 Notes: response_model=JobDetailOut.
+
+#### POST /api/jobs/{job_id}/duplicate
+
+Duplicate a job — deep-copy its config (blueprint/parameters/questions/settings) and a full applicant snapshot into a NEW independent job created as a draft, unlisted.
+
+- **Auth:** JWT httpOnly cookie (required) + _verify_job_access (org match; member must be collaborator).
+- **Path params:** `job_id`:UUID — the source job id
+- **Query params:** none
+
+Request: none
+
+Response:
+```json
+// JobDetailOut (same as GET /api/jobs/{job_id}) — the newly created job
+```
+
+Status codes: 200 OK; 401 not authenticated; 403 'Access denied'; 404 'Job not found'.
+
+Notes: response_model=JobDetailOut. The new job is created with `status=draft`, `is_job_listed=false`, `custom_job_id=null`, and `title` suffixed " (Copy)". Snapshots EVERY applicant of the source job (name/email/phone, resume data, all stage flags, screening/functional status+score, decision, report_url, scores) into the copy, EXCEPT each copied applicant's `scheduling_token` and `calendar_event_id` are reset to null (live single-use handles). The creating user is added as a `JobCollaborator` on the new job.
 
 #### PATCH /api/jobs/{job_id}/settings
 
