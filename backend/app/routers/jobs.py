@@ -2199,6 +2199,8 @@ def schedule_interview(
             update_calendar_event(
                 applicant.calendar_event_id,
                 scheduled_at,
+                summary=summary,
+                description=desc,
                 recruiter_id=recruiter_id,
                 db=db
             )

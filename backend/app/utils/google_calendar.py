@@ -86,7 +86,7 @@ def create_calendar_event(summary: str, description: str, candidate_email: str, 
         import uuid
         return f"sim-cal-err-{uuid.uuid4()}"
 
-def update_calendar_event(event_id: str, start_time: datetime, duration_minutes: int = 30, recruiter_id=None, db=None) -> bool:
+def update_calendar_event(event_id: str, start_time: datetime, duration_minutes: int = 30, summary: str = None, description: str = None, recruiter_id=None, db=None) -> bool:
     if event_id.startswith("sim-cal"):
         logger.info(f"[SIMULATION] Updated Calendar Event {event_id} to new start time {start_time}")
         return True
@@ -102,7 +102,14 @@ def update_calendar_event(event_id: str, start_time: datetime, duration_minutes:
         event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
         event['start'] = {'dateTime': start_time.isoformat(), 'timeZone': 'UTC'}
         event['end'] = {'dateTime': end_time.isoformat(), 'timeZone': 'UTC'}
-        
+        # Refresh title + description (the join link lives in the description) so a
+        # reschedule — or an event created before the link was added — carries the
+        # unique interview link, not just a new time.
+        if summary:
+            event['summary'] = summary
+        if description:
+            event['description'] = description
+
         # sendUpdates='all' so the candidate gets the reschedule notification email
         # (Railway blocks SMTP, so Google Calendar is the delivery channel).
         service.events().update(calendarId=calendar_id, eventId=event_id, body=event, sendUpdates='all').execute()
