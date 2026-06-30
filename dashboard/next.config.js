@@ -5,7 +5,14 @@
 // first-party (the browser talks only to the dashboard domain), so cross-site
 // SameSite=Lax cookies work without any backend change. Inert when unset, so
 // local dev keeps calling the backend directly via NEXT_PUBLIC_API_URL.
-const backendOrigin = (process.env.BACKEND_ORIGIN || '').replace(/\/$/, '');
+let backendOrigin = (process.env.BACKEND_ORIGIN || '').replace(/\/$/, '');
+// Tolerate a scheme-less BACKEND_ORIGIN (e.g. "interviehire-backend-...up.railway.app"):
+// Next.js rewrite destinations MUST start with http(s):// or '/', so a value
+// without a scheme makes `next build` fail with "Invalid rewrites found" and
+// blocks every dashboard deploy. Prepend https:// when the scheme is missing.
+if (backendOrigin && !/^https?:\/\//i.test(backendOrigin)) {
+  backendOrigin = `https://${backendOrigin}`;
+}
 
 const BACKEND_API_PREFIXES = [
   'auth', 'jobs', 'team', 'organisation', 'usage', 'settings', 'public', 'leaderboard',
