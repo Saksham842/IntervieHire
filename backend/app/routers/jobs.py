@@ -2165,11 +2165,24 @@ def schedule_interview(
             if org.contact_email:
                 organizer_email = org.contact_email
 
+    # Interview-room + reschedule links. Built BEFORE the calendar call so the
+    # join link can be embedded in the event DESCRIPTION — the Google Calendar
+    # invite email (sendUpdates='all') is the delivery channel now that Railway
+    # blocks the SMTP iCal email, so the link must live in the event itself.
+    # FRONTEND_URL may be a comma-separated list; take the first origin.
+    _frontend = (settings.FRONTEND_URL or "").split(",")[0].strip().rstrip("/")
+    reschedule_link = f"{_frontend}/reschedule.html?token={applicant.scheduling_token}"
+    interview_link = f"{settings.INTERVIEW_ROOM_URL.rstrip('/')}/interviewcandidateroom?sessionId={applicant.id}"
+
     # Create/update Google Calendar event
     try:
         from app.utils.google_calendar import create_calendar_event, update_calendar_event
         summary = f"{stage_name} - {applicant.name}"
-        desc = f"Interview scheduled for the {job_title} role at IntervieHire."
+        desc = (
+            f"Interview for the {job_title} role at IntervieHire.\n\n"
+            f"Join your interview here: {interview_link}\n\n"
+            f"Need a different time? Reschedule: {reschedule_link}"
+        )
         if not applicant.calendar_event_id:
             applicant.calendar_sequence = 0
             event_id = create_calendar_event(
@@ -2194,12 +2207,10 @@ def schedule_interview(
     except Exception as cal_err:
         logger.error(f"Failed to update Google Calendar event: {cal_err}")
 
-    # Send confirmation email with calendar invite and interview link
+    # Send confirmation email with calendar invite and interview link.
+    # (reschedule_link + interview_link were computed above and embedded in the
+    # calendar event; this SMTP path is skipped on Railway — see email_sender.)
     try:
-        reschedule_link = f"{settings.FRONTEND_URL}/reschedule.html?token={applicant.scheduling_token}"
-        # The candidate joins the SAME AI interview room as "Run test interview"
-        # (the engine web app), keyed by the applicant id as the session id.
-        interview_link = f"{settings.INTERVIEW_ROOM_URL.rstrip('/')}/interviewcandidateroom?sessionId={applicant.id}"
         uid = f"interview-{stage_name.lower().replace(' ', '-')}-{applicant.id}@interviehire.com"
         send_ical_invitation_email(
             candidate_name=applicant.name,
