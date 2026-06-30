@@ -65,6 +65,7 @@ export default function Interview() {
   // token-enforced engine endpoints (/start, GET session, WS register).
   const inviteTokenRef = useRef('');
   const sessionStartedRef = useRef(false);
+  const captureStartedRef = useRef(false);
   const [transcriptReady, setTranscriptReady] = useState(false);
 
   // Post-interview report flow: the transcript is captured live (candidate via
@@ -340,17 +341,40 @@ export default function Interview() {
           console.error(`Engine /start returned ${startRes.status}; proceeding into the interview anyway.`);
         }
         startRecording();
-        // Begin transcript capture: mark t=0 and stream candidate speech via the
-        // browser Web Speech API (the interviewer text is captured from the
-        // pasted Convai memory transcript at the end and merged in).
-        transcript.markStart();
-        transcript.startBrowserSTT();
+        // Transcript capture (markStart + browser STT + auto interviewer-audio
+        // capture) is started in the calibration-gated effect below — NOT here —
+        // so it never depends on the proctoring WebSocket being OPEN. A flaky WS
+        // for a scheduled session used to block this whole effect, so candidate
+        // STT never started and the interview captured zero transcript events.
       } catch (err) {
         console.error('startSession failed', err);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calibration, socket]);
+
+  // Start transcript capture as soon as calibration is done, independent of the
+  // proctoring WebSocket. Candidate speech → browser STT. Interviewer (Lina) voice
+  // → auto-attached to the audio ALREADY shared on the mandatory proctoring
+  // screen-share, so it's captured without the candidate clicking anything (the
+  // old flow required a manual "Capture interviewer" click that real candidates
+  // skipped → no interviewer turns). If no audio was shared, the banner remains
+  // for a manual click (a user gesture, which can open its own audio prompt).
+  useEffect(() => {
+    if (!calibration || captureStartedRef.current) return;
+    captureStartedRef.current = true;
+    transcript.markStart();
+    transcript.startBrowserSTT();
+    const sharedAudio = getScreenAudioStream?.() ?? null;
+    if (sharedAudio) {
+      const r = transcript.startAvatarCaptureFromStream(sharedAudio);
+      if (r.ok) {
+        setAvatarCapture('on');
+        setAvatarCaptureMsg('Interviewer voice is being recorded for transcription.');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calibration]);
 
   // Let the candidate enable interviewer-voice capture (a user gesture is
   // required for tab-audio sharing). They pick the interview tab and tick
