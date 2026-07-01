@@ -6,7 +6,7 @@
 // deterministically per candidate from the job's blueprint so the tab is live.
 
 import { document } from './runtime.js';
-import { escapeHTML } from './escape.js';
+import { escapeHTML, sourceLabel } from './escape.js';
 import { AppState } from './state.js';
 import { filterCandidatesByDateRange } from './render-views.js';
 import { soundEngine } from './sound.js';
@@ -236,9 +236,6 @@ function deriveStageStates(c) {
   const inList = (v, arr) => arr.indexOf(v) !== -1;
 
   // Per-stage raw signals off the candidate object (see mapApplicantOutToCandidate).
-  const resumeAnalyzed = !!c.resumeAnalysis || c.matchScore != null || c.resumeShortlisted != null || !!c.resumeAnalysed;
-  const resumeRejected = c.resumeShortlisted === false || (c.resumeAnalysis && c.resumeAnalysis.recommendation === 'Reject');
-
   const screeningCompleted = c.screeningStatus === 'Completed' || !!c.recruiterScreening || c.recruiterScreeningScore != null;
   const screeningActive = inList(c.screeningStatus, ['Attempting', 'Evaluating']);
   const screeningRejected = c.recruiterScreening === 'Poor fit' || c.screeningStatus === 'Slot Missed';
@@ -251,25 +248,33 @@ function deriveStageStates(c) {
   const functionalActive = inList(c.interviewStatus, ['Attempting', 'Evaluating']);
   const functionalRejected = c.interviewStatus === 'Slot Missed';
 
+  const overallRejected = c.decision === 'rejected' || c.status === 'Rejected';
+
   // How far down the funnel the candidate actually got. 'Hired' is intentionally
   // excluded here so a candidate hired off an earlier stage doesn't show a phantom
-  // (yellow) later stage they never attended.
+  // (yellow) later stage they never attended. The reject-gated clauses pin a rejected
+  // candidate to the DEEPEST stage they reached: on a reject the backend keeps
+  // screening_status/functional_status (so interviewStatus/screeningStatus stay non-null)
+  // even though status/decision collapse — so red lands on the stage it happened at.
   const reachedFunctional = functionalCompleted || functionalActive || functionalRejected
-    || c.interviewStatus === 'Incomplete' || c.status === 'Functional';
+    || c.interviewStatus === 'Incomplete' || c.status === 'Functional'
+    || (overallRejected && c.interviewStatus != null);      // survives reject: functional_status was set
   const reachedScreening = reachedFunctional || screeningCompleted || screeningActive || screeningRejected
-    || c.status === 'Screening' || c.decision === 'shortlisted';
-
-  const overallRejected = c.decision === 'rejected' || c.status === 'Rejected';
+    || c.status === 'Screening' || c.decision === 'shortlisted'
+    || (overallRejected && c.screeningStatus != null);      // survives reject: screening_status was set
 
   let resume = 'idle';
   let screening = 'idle';
   let functional = 'idle';
 
-  // RESUME — advancing past it wins over its own signal.
+  // RESUME — green once cleared/advanced past; red only on a real resume-stage rejection
+  // (recruiter rejected AND never advanced further); yellow while it still sits at resume
+  // awaiting a decision. resume_shortlisted DEFAULTS to false in the DB, so false = "not yet
+  // advanced", NOT "rejected" — it may only ever turn the chip green, never red.
   if (reachedScreening) resume = 'pass';
-  else if (resumeRejected || (overallRejected && !reachedScreening)) resume = 'reject';
-  else if (resumeAnalyzed) resume = 'pass';
-  else if (c.status === 'Resume') resume = 'active';
+  else if (c.resumeShortlisted === true) resume = 'pass';
+  else if (overallRejected) resume = 'reject';
+  else resume = 'active';
 
   // SCREENING — only meaningful once the funnel reaches it.
   if (reachedScreening) {
@@ -497,7 +502,7 @@ function rosterRow({ candidate, report }, i) {
     <span class="da-avatar">${escapeHTML(initials(candidate.name))}</span>
     <div class="da-row-id">
       <span class="da-row-name">${escapeHTML(candidate.name)}</span>
-      <span class="da-row-meta">${escapeHTML(candidate.source || 'Applicant')}</span>
+      <span class="da-row-meta">${escapeHTML(sourceLabel(candidate.entryMethod))}</span>
     </div>
     <span class="da-row-conf" title="Resume · Screening · Functional" style="display:inline-flex;gap:4px;">${dot(ss.resume, 'Resume')}${dot(ss.screening, 'Screening')}${dot(ss.functional, 'Functional')}</span>
     <span class="da-reco-chip" style="color:${reco.color};border-color:${reco.color}40;background:${reco.color}14;">${reco.label}</span>
