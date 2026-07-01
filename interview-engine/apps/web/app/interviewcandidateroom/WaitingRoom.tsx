@@ -12,10 +12,16 @@ import { useEffect, useState } from 'react';
 
 type Brand = { name?: string; primaryColor?: string; logoUrl?: string; whiteLabel?: boolean } | null;
 
-// A slide can render a real product screenshot (drop the file in
-// apps/web/public/guide/ and set `image`) OR fall back to the emoji "mock" art
-// so the tour looks complete before screenshots are wired in.
-type Slide = { badge: string; title: string; body: string; art: string; image?: string };
+// The tour spotlights ONE real screenshot of the room (public/guide/room.png):
+// each slide shows the full room with everything dimmed except `focus` — the
+// rectangle (in % of the image) it is describing — outlined with a glowing
+// border. `art` is the emoji fallback shown if the screenshot fails to load.
+type Focus = { top: number; left: number; width: number; height: number };
+type Slide = { badge: string; title: string; body: string; art: string; focus?: Focus };
+
+// Full-screenshot of the interview room. Regions below are tuned to this layout;
+// if you replace the image, re-check the `focus` rects.
+const ROOM_IMAGE = '/guide/room.png';
 
 const SLIDES: Slide[] = [
   {
@@ -23,42 +29,42 @@ const SLIDES: Slide[] = [
     title: 'A quick tour before you begin',
     body: 'Your interview happens right here on one screen: your AI interviewer on the left, the current question on the right, and your camera and controls along the bottom. Here’s what each part does.',
     art: '🗺️',
-    // image: '/guide/room-overview.png',
+    // No focus → the whole room is shown, undimmed, as an overview.
   },
   {
     badge: 'On the left',
     title: 'Lina, your AI interviewer',
     body: 'The big panel is Lina — a live AI avatar who asks the questions out loud and listens to your reply. Just speak naturally when she finishes; if you’d rather type, press Enter to open the text box. The “LIVE” badge means she’s hearing you.',
     art: '🧑‍💼',
-    // image: '/guide/avatar-panel.png',
+    focus: { top: 15, left: 2, width: 61, height: 76 },
   },
   {
     badge: 'On the right',
     title: 'The question card',
     body: 'Every question appears here in text with its topic (e.g. “Data Structures”), a difficulty hint, and a counter like “Question 01/04”. Use ‹ and NEXT › to move between questions at your own pace — nothing is timed per question.',
     art: '❓',
-    // image: '/guide/question-card.png',
+    focus: { top: 15, left: 65, width: 33, height: 76 },
   },
   {
     badge: 'Bottom-right tile',
     title: 'Your camera & microphone',
     body: 'The small “YOU” tile is your live webcam so you can see yourself. Before the interview you’ll grant camera + screen-share access and do a short gaze calibration — this only takes a moment and keeps everything verified.',
     art: '🎥',
-    // image: '/guide/candidate-tile.png',
+    focus: { top: 66, left: 45, width: 18, height: 23 },
   },
   {
     badge: 'Top bar',
     title: 'Connection & fair-play monitoring',
     body: 'The top strip shows your role, connection quality and a running timer. The shield badge means the session is proctored — please stay on this tab and keep your eyes on the screen. Switching tabs or looking away is flagged.',
     art: '🛡️',
-    // image: '/guide/topbar.png',
+    focus: { top: 1, left: 0, width: 100, height: 12 },
   },
   {
     badge: 'Bottom controls',
     title: 'Controls & finishing up',
     body: 'Along the bottom you can toggle your headphones, microphone and camera. When you’re done, press the red end-call button. Your transcript is captured automatically and your report is generated — no copying or pasting needed.',
     art: '📞',
-    // image: '/guide/controls.png',
+    focus: { top: 91, left: 0, width: 100, height: 9 },
   },
 ];
 
@@ -80,6 +86,9 @@ export function WaitingRoom({
   brand: Brand;
 }) {
   const [slide, setSlide] = useState(0);
+  // One-way fallback: if the room screenshot can't load, every slide shows its
+  // emoji instead of a broken image, so the tour still reads cleanly.
+  const [imgOk, setImgOk] = useState(true);
 
   // Auto-advance the tour; pausing is not needed — dots let them jump manually.
   useEffect(() => {
@@ -161,7 +170,24 @@ export function WaitingRoom({
         <div className="lobby-right">
           <div className="tour-badge">{s.badge}</div>
           <div className="tour-art" key={slide}>
-            {s.image ? <img src={s.image} alt={s.title} /> : <span className="tour-emoji">{s.art}</span>}
+            {imgOk ? (
+              <div className="tour-shot">
+                <img src={ROOM_IMAGE} alt={s.title} onError={() => setImgOk(false)} />
+                {s.focus && (
+                  <div
+                    className="tour-spot"
+                    style={{
+                      top: `${s.focus.top}%`,
+                      left: `${s.focus.left}%`,
+                      width: `${s.focus.width}%`,
+                      height: `${s.focus.height}%`,
+                    }}
+                  />
+                )}
+              </div>
+            ) : (
+              <span className="tour-emoji">{s.art}</span>
+            )}
           </div>
           <h2 className="tour-title">{s.title}</h2>
           <p className="tour-body">{s.body}</p>
@@ -251,7 +277,20 @@ function lobbyStyles(accent: string) {
     border: 1px solid rgba(255,255,255,.08);
     animation: tourfade .5s ease;
   }
-  .tour-art img { width: 100%; height: 100%; object-fit: cover; }
+  .tour-shot { position: relative; width: 100%; height: 100%; }
+  .tour-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Spotlight: the huge spread box-shadow dims the whole screenshot except this
+     rect, and the border+glow ring the region the current slide describes. */
+  .tour-spot {
+    position: absolute; border-radius: 10px;
+    border: 2px solid ${accent};
+    box-shadow: 0 0 0 9999px rgba(3,7,18,.60), 0 0 22px ${accent};
+    animation: spotpulse 1.8s ease-in-out infinite;
+  }
+  @keyframes spotpulse {
+    0%,100% { box-shadow: 0 0 0 9999px rgba(3,7,18,.60), 0 0 14px ${accent}; }
+    50%     { box-shadow: 0 0 0 9999px rgba(3,7,18,.60), 0 0 28px ${accent}; }
+  }
   .tour-emoji { font-size: 72px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.4)); }
   @keyframes tourfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
