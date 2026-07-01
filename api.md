@@ -6,6 +6,7 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-07-01** — Made every field of `OrganisationIn` optional on **PUT /api/organisation** and **POST /api/organisation** (`backend/app/schemas.py`): `org_name` changed from required `str` to `Optional[str] = None` (all other fields were already optional). Auth, response schema (`OrganisationOut`), and handler logic are UNCHANGED. Fixes the Career Page settings save (`apiUpdateOrganisation({ career_subdomain, career_intro })` in `dashboard/src/dashboard/api.js`), which sends only the two career fields and previously got **422 "org_name field required"**; the upsert's update branch already applies `model_dump(exclude_unset=True)`, so omitted fields (incl. `org_name`) are left untouched. Onboarding's separate `OnboardingIn` (POST /api/auth/onboarding) still requires `org_name`, so org creation is unaffected.
 - **2026-06-30** — Added **POST /api/jobs/{job_id}/duplicate** (`backend/app/routers/jobs.py`) — auth required; no request body; path param `job_id`:UUID; gated by `_verify_job_access` (404 if the job is not found or not in the caller's active org). Deep-copies the source job's config into a NEW independent job that is `status=draft` and `is_job_listed=false`, with `custom_job_id` reset to null and title suffixed " (Copy)"; also snapshots EVERY applicant (name/email/phone, resume data, all stage flags, screening/functional status+score, decision, report_url, scores) EXCEPT each copy's `scheduling_token` and `calendar_event_id` are reset to null (live single-use handles). The creator is added as a `JobCollaborator`. Returns 200 with a `JobDetailOut` body (same schema as **GET /api/jobs/{job_id}**). Also (NO schema change): **PATCH /api/jobs/{job_id}/settings** (`JobSettingsIn`) is now invoked by the dashboard "Edit Posting" flow to persist `title` / `custom_job_id` / `tags`.
 - **2026-06-30** — Durable super_admin active-organisation memory via the new internal `users.last_active_org_id` column (`backend/app/routers/auth.py`, `backend/app/utils/auth.py` `get_active_org_id`). **NO request/response schema fields changed** — `last_active_org_id` is internal only and appears in NO `*Out` Pydantic model; only the behavior/prose of four `/api/auth` routes changed. **POST /api/auth/login** no longer clobbers an existing super_admin `active_org_id` selection: the cookie is set only when a target resolves, by precedence (1) the `active_org_id` cookie already on the request, else (2) the user's stored `users.last_active_org_id`, else (3) a deterministic first org `ORDER BY created_at ASC, id ASC` (previously it unconditionally overwrote the cookie with an arbitrary `Organisation.first()` on every login, which made the wrong org reappear). **POST /api/auth/switch-context** now ALSO persists the chosen org to `users.last_active_org_id` (server-side `db.commit()`) so the selection survives cookie loss and future logins. **GET /api/auth/organisations** now returns the list `ORDER BY org_name` (was unordered). **GET /api/auth/me** / the shared `get_active_org_id` helper now resolve the super_admin org via the fallback chain `active_org_id` cookie → `users.last_active_org_id` → the super_admin's own `organisation_id` → deterministic first org (`ORDER BY created_at ASC, id ASC`) (was cookie → arbitrary `.first()`).
 - **2026-06-30** — Restructured the `UsageStatsOut` response schema of **GET /api/usage/stats** (`backend/app/routers/usage.py`, `backend/app/schemas.py`) for the Usage Overview cards — request/auth UNCHANGED. REMOVED `int` field `scheduled` (was a Card-1 entry-route bucket). **Card 1 (Total Applicants)** now counts by **`entry_method`** (`career_page`/`bulk_upload`/`direct_link`/`ats`, else `other`) — i.e. how the candidate was actually added — instead of the internal stage-router field `source`; `other` absorbs NULL/functional/any unlisted method and the five buckets reconcile to `total_applicants`. ADDED four `int` fields: `screening_not_scheduled`, `screening_rejected`, `functional_not_scheduled`, `functional_rejected`. **Card 3 (Recruiter Screening)** and **Card 4 (Functional Interview)** pills are now a 5-way precedence partition over the candidates who reached that stage, so the five pills SUM to the stage headline (`screening_reached` / `functional_reached`): screening = Advanced (`screening_advanced`, = reached functional) → Rejected (`decision == "rejected"`) → Attempted → Scheduled → Not Scheduled; functional = Hired (`decision == "hired"`) → Rejected → Attempted → Scheduled → Not Scheduled. `screening_attempted` now means recruiter feedback is present (`recruiter_screening` not null OR `recruiter_screening_score` not null), NOT `screening_status == "completed"` (nothing ever writes that value); `functional_attempted` still means `functional_status == "completed"` (set by the engine webhook). `resume_*` fields and **GET /api/usage/candidates-table** are unchanged.
@@ -1153,9 +1154,10 @@ Create or update (upsert) the active organisation's settings.
 
 Request:
 ```json
-// OrganisationIn (JSON body)
+// OrganisationIn (JSON body) — ALL fields optional (default null), so partial
+// updates (e.g. saving only career_subdomain/career_intro) are valid.
 {
-  "org_name": "string",
+  "org_name": "string | null (optional, default null)",
   "domain": "string | null (optional, default null)",
   "contact_email": "string | null (optional, default null)",
   "website_link": "string | null (optional, default null)",
@@ -1183,7 +1185,7 @@ Response:
 }
 ```
 
-Status codes: 200 OK; 401 (from get_current_user); 422 validation error (e.g. missing org_name).
+Status codes: 200 OK; 401 (from get_current_user); 422 validation error (malformed body; no field is required as of 2026-07-01).
 
 Notes: Three-branch upsert — (1) no resolvable org_id → create new Organisation from model_dump(), set current_user.organisation_id (onboarding); (2) org_id resolves + row exists → partial update via model_dump(exclude_unset=True); (3) org_id resolves but no row → create with id=org_id and full model_dump() (exclude_unset NOT applied, so unset optionals written as None). Success is 200.
 
@@ -1197,9 +1199,9 @@ Create or update (upsert) the active organisation's settings — alias of the PU
 
 Request:
 ```json
-// OrganisationIn (JSON body)
+// OrganisationIn (JSON body) — ALL fields optional (default null); see PUT above.
 {
-  "org_name": "string",
+  "org_name": "string | null (optional, default null)",
   "domain": "string | null (optional, default null)",
   "contact_email": "string | null (optional, default null)",
   "website_link": "string | null (optional, default null)",

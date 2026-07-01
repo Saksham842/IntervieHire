@@ -89,7 +89,10 @@ class OrganisationOut(BaseModel):
         from_attributes = True
  
 class OrganisationIn(BaseModel):
-    org_name: str
+    # Optional so partial updates (e.g. saving only career_subdomain/career_intro
+    # from the Career Page settings) don't 422. The PUT/POST handler applies
+    # model_dump(exclude_unset=True) on update, so omitted fields are untouched.
+    org_name: Optional[str] = None
     domain: Optional[str] = None
     contact_email: Optional[str] = None
     website_link: Optional[str] = None

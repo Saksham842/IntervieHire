@@ -274,7 +274,8 @@ function initMountBindings() {
             updateJobsCounters();
             showPremiumToast(`Job duplicated as "${dup.cardName || dup.roleName}".`, 'success');
           } catch (e) {
-            showPremiumToast(`Couldn't duplicate "${job.cardName || job.roleName}": ${(e && e.message) || 'backend error'}`, 'error');
+            const m = (e && e.message) === 'Not Found' ? 'server is updating, please try again in a moment' : (e && e.message) || 'backend error';
+            showPremiumToast(`Couldn't duplicate "${job.cardName || job.roleName}": ${m}`, 'error');
           }
           break;
         }
@@ -466,7 +467,8 @@ function initMountBindings() {
           saveStateToLocalStorage();
           renderJobCards();
           updateJobsCounters();
-          showPremiumToast(`Couldn't save changes: ${(e && e.message) || 'backend error'}`, 'error');
+          const m = (e && e.message) === 'Not Found' ? 'server is updating, please try again in a moment' : (e && e.message) || 'backend error';
+          showPremiumToast(`Couldn't save changes: ${m}`, 'error');
         });
     }
     });
