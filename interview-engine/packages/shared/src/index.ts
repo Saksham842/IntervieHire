@@ -49,3 +49,4 @@ export interface EvaluationReport {
 }
 
 export * from './evaluation';
+export * from './flagcheck/flagcheckTranscription';

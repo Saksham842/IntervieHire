@@ -669,6 +669,27 @@ export default function Interview() {
               <ShieldCheck size={14} />
               {integrity.label}
             </span>
+            {/* Live flagcheck: tier-1 AI-tone heuristics over the candidate's
+                finalized speech. Only surfaces MEDIUM/HIGH; the server re-runs
+                and blends an LLM pass on the saved transcript. */}
+            {transcript.aiToneAssessment && transcript.aiToneAssessment.band !== 'LOW' && (
+              <span
+                title={transcript.aiToneAssessment.reasons.slice(0, 4).join(' · ')}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  borderRadius: 9999,
+                  padding: '2px 8px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: transcript.aiToneAssessment.band === 'HIGH' ? '#ffe4e6' : '#fef3c7',
+                  color: transcript.aiToneAssessment.band === 'HIGH' ? '#be123c' : '#b45309',
+                }}
+              >
+                ⚠ AI-tone {transcript.aiToneAssessment.band} · {transcript.aiToneAssessment.score}
+              </span>
+            )}
             <span className="bars">
               <i />
               <i />

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '@/lib/api';
+import { analyzeAiToneHeuristics, type AiToneAssessment } from '@interviehire/shared';
 
 export type InterviewTranscriptEntry = {
   text: string;
@@ -58,6 +59,7 @@ export function useInterviewTranscription(sessionId: string) {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [interviewTranscript, setInterviewTranscript] = useState<InterviewTranscriptEntry[]>([]);
   const [interimTranscript, setInterimTranscript] = useState('');
+  const [aiToneAssessment, setAiToneAssessment] = useState<AiToneAssessment | null>(null);
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
 
@@ -205,6 +207,11 @@ export function useInterviewTranscription(sessionId: string) {
         const updated = [...transcriptRef.current, ...finalizedEntries];
         transcriptRef.current = updated;
         setInterviewTranscript(updated);
+
+        // Tier-1 flagcheck: instant, synchronous AI-tone heuristics over the full
+        // transcript so far. The server re-runs these on the saved .txt file and
+        // blends in an LLM semantic pass.
+        setAiToneAssessment(analyzeAiToneHeuristics(updated.map((entry) => entry.text).join(' ')));
       }
     };
     recognition.onerror = (event) => {
@@ -273,6 +280,7 @@ export function useInterviewTranscription(sessionId: string) {
     transcriptRef.current = [];
     setInterviewTranscript([]);
     setInterimTranscript('');
+    setAiToneAssessment(null);
     lastSavedPayloadRef.current = '';
     createdAtRef.current = new Date().toISOString();
   }, [sessionId]);
@@ -308,6 +316,7 @@ export function useInterviewTranscription(sessionId: string) {
     isTranscribing,
     interviewTranscript,
     interimTranscript,
+    aiToneAssessment,
     microphoneError,
     transcriptionError,
     speechRecognitionSupported,

@@ -8,6 +8,7 @@ import { buildVapiAssistantConfig } from '../services/vapi-config.service.js';
 import { processRecordingForSession, transcribeUploadedFile } from '../services/transcription.service.js';
 import { handleCandidateTranscript } from '../services/interview-conversation.service.js';
 import { ensureTranscriptMeta, finalizeTranscript } from '../services/transcript.service.js';
+import { saveTranscriptFile, flagcheckTranscriptFile, transcriptFilePath, FLAGCHECK_DISCLAIMER } from '../services/flagcheckTranscription.service.js';
 
 // Per-candidate invite enforcement shared by the post-start session routes: a
 // session bound to an inviteToken only serves the matching ?token=. Returns true
@@ -41,6 +42,67 @@ function readTranscript(raw: unknown): TranscriptRecord[] {
     }
   }
   return [];
+}
+
+/** Only call the LLM semantic pass once the transcript has grown enough since the last run. */
+const FLAGCHECK_LLM_MIN_GROWTH_CHARS = 400;
+
+/**
+ * Transcript flagcheck. Best-effort, fire-and-forget: saves the full transcript
+ * to `transcripts/<sessionId>.txt`, then runs the AI-tone analysis on that file
+ * (deterministic heuristics always; LLM semantic pass only once enough new text
+ * has accumulated, or when finalized). The verdict is stored in a dedicated
+ * `transcript_flagcheck` entry on the session transcript JSON, keyed by
+ * transcriptId. Re-reads immediately before writing to limit clobbering the
+ * concurrent speech-to-text save (last-writer-wins is acceptable for this MVP).
+ */
+async function runTranscriptFlagcheck(
+  sessionId: string,
+  transcriptId: string,
+  fullText: string,
+  finalized: boolean,
+): Promise<void> {
+  const session = await prisma.interviewSession.findUnique({ where: { id: sessionId } });
+  if (!session) return;
+
+  // 1. Persist the live transcription to a .txt file.
+  const filePath = await saveTranscriptFile(sessionId, fullText);
+
+  // 2. Decide whether this run earns an LLM pass.
+  const current = readTranscript(session.transcript);
+  const existing = current.find(
+    (item) => item?.type === 'transcript_flagcheck' && item?.transcriptId === transcriptId,
+  );
+  const analyzedChars = Number(existing?.analyzedChars) || 0;
+  const runLlm = finalized || fullText.length - analyzedChars >= FLAGCHECK_LLM_MIN_GROWTH_CHARS;
+
+  // 3. Run the flagcheck on the file.
+  const assessment = await flagcheckTranscriptFile(filePath, { runLlm });
+
+  const entry = {
+    type: 'transcript_flagcheck',
+    transcriptId,
+    transcriptFile: transcriptFilePath(sessionId),
+    assessment,
+    // Track chars analyzed by the LLM so the next run knows when to re-run it.
+    analyzedChars: runLlm ? fullText.length : analyzedChars,
+    finalized,
+    updatedAt: new Date().toISOString(),
+    disclaimer: FLAGCHECK_DISCLAIMER,
+  };
+
+  // Re-read just before writing to reduce the window for clobbering the speech save.
+  const fresh = readTranscript(
+    (await prisma.interviewSession.findUnique({ where: { id: sessionId } }))?.transcript,
+  );
+  const index = fresh.findIndex(
+    (item) => item?.type === 'transcript_flagcheck' && item?.transcriptId === transcriptId,
+  );
+  const updated = index >= 0
+    ? fresh.map((item, i) => (i === index ? { ...item, ...entry } : item))
+    : [...fresh, entry];
+
+  await prisma.interviewSession.update({ where: { id: sessionId }, data: { transcript: updated as any } });
 }
 
 const juniorSdeQuestions = [
@@ -454,6 +516,11 @@ export async function interviewRoutes(app: FastifyInstance) {
       ? current.map((item, index) => index === existingIndex ? { ...item, ...entry, createdAt: item.createdAt ?? entry.createdAt } : item)
       : [...current, entry];
     await prisma.interviewSession.update({ where: { id: req.params.id }, data: { transcript: updated as any } });
+
+    // Save transcript to .txt + run AI-tone flagcheck on the file (best-effort, non-blocking).
+    runTranscriptFlagcheck(req.params.id, transcriptId, fullText, body.finalized === true).catch((err) =>
+      app.log.error('Transcript flagcheck error', err),
+    );
 
     return { stored: true, entry };
   });

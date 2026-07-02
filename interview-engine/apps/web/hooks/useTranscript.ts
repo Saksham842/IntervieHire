@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '@/lib/api';
+import { analyzeAiToneHeuristics, type AiToneAssessment } from '@interviehire/shared';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // useTranscript — client-side transcript capture for the interview room.
@@ -46,6 +47,13 @@ export function useTranscript(sessionId: string) {
   const avatarSegTimerRef = useRef<any>(null);
   const avatarActiveRef = useRef<boolean>(false);
 
+  // Live flagcheck: accumulate the candidate's finalized speech and run the
+  // synchronous tier-1 AI-tone heuristics over it so the room can surface a
+  // warning badge in real time. The server re-runs (and blends an LLM pass) on
+  // the saved transcript; this is the instant client-side signal only.
+  const candidateTextRef = useRef<string>('');
+  const [aiToneAssessment, setAiToneAssessment] = useState<AiToneAssessment | null>(null);
+
   // Mark the interview start so timestamps are relative to it.
   const markStart = useCallback(() => {
     startRef.current = Date.now();
@@ -76,6 +84,13 @@ export function useTranscript(sessionId: string) {
   const recordEvent = useCallback((event: TranscriptEventInput) => {
     const text = (event.text || '').trim();
     if (!text) return; // ignore empty text up front
+
+    // Tier-1 flagcheck over the candidate's finalized speech so far.
+    if (event.speaker === 'candidate' && (event.isFinal ?? true)) {
+      candidateTextRef.current = `${candidateTextRef.current} ${text}`.trim();
+      setAiToneAssessment(analyzeAiToneHeuristics(candidateTextRef.current));
+    }
+
     queueRef.current.push({
       speaker: event.speaker,
       text,
@@ -312,6 +327,7 @@ export function useTranscript(sessionId: string) {
   }, []);
 
   return {
+    aiToneAssessment,
     markStart,
     nowMs,
     recordEvent,
