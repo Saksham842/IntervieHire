@@ -302,11 +302,14 @@ export const roomStyles = `
   /* ===== Pre-interview permission gate ===== */
   .gate {
     position: fixed; inset: 0; z-index: 9999;
-    display: grid; place-items: center;
+    display: flex; overflow-y: auto;
     background: #0a0f1a; padding: 24px;
     color: #e2e8f0; font-family: "IBM Plex Sans", system-ui, sans-serif;
   }
-  .gate-card { width: 100%; max-width: 560px; }
+  /* margin:auto centers the card when it fits, but still allows scrolling (the
+     top isn't clipped) when the card is taller than the viewport — e.g. the
+     five-checkbox consent gate, whose "I do not consent" button was cut off. */
+  .gate-card { width: 100%; max-width: 560px; margin: auto; }
   .gate-eyebrow { margin: 0; color: #67e8f9; font-size: 12px; letter-spacing: .35em; text-transform: uppercase; text-align: center; }
   .gate-title { margin: 18px 0 0; font: 900 30px Manrope, sans-serif; text-align: center; }
   .gate-sub { margin: 12px 0 0; color: #94a3b8; font-size: 14px; line-height: 1.6; text-align: center; }
@@ -317,9 +320,12 @@ export const roomStyles = `
   .gate-check-detail { margin: 2px 0 0; font-size: 12px; color: #94a3b8; }
   .ok-ico { color: #6ee7b7; }
   .wait-ico { color: #67e8f9; }
+  .bad-ico { color: #f87171; }
+  .gate-check-detail.is-bad { color: #fca5a5; }
   .gate-dot { width: 10px; height: 10px; border-radius: 999px; }
   .gate-dot.is-ok { background: #34d399; }
   .gate-dot.is-wait { background: #fbbf24; }
+  .gate-dot.is-bad { background: #f87171; }
   .gate-btn {
     margin-top: 24px; width: 100%;
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -328,6 +334,82 @@ export const roomStyles = `
     box-shadow: 0 0 40px rgba(103,232,249,.18);
   }
   .gate-error { margin-top: 16px; text-align: center; font-size: 14px; color: #fecdd3; }
+  .gate-spinner {
+    width: 36px; height: 36px; margin: 0 auto 4px;
+    border-radius: 999px;
+    border: 3px solid rgba(255,255,255,.12);
+    border-top-color: #67e8f9;
+    animation: gate-spin .8s linear infinite;
+  }
+  @keyframes gate-spin { to { transform: rotate(360deg); } }
+
+  /* ===== Informed-consent gate (polished) ===== */
+  .consent-card { max-width: 600px; }
+  .consent-badge {
+    width: 54px; height: 54px; margin: 0 auto; border-radius: 16px;
+    display: grid; place-items: center; color: #67e8f9;
+    background: linear-gradient(150deg, rgba(103,232,249,.20), rgba(52,211,153,.12));
+    border: 1px solid rgba(103,232,249,.35);
+    box-shadow: 0 12px 34px rgba(103,232,249,.18), inset 0 1px 0 rgba(255,255,255,.12);
+  }
+  .consent-list { margin-top: 24px; display: grid; gap: 10px; text-align: left; }
+  .consent-item {
+    position: relative; display: flex; align-items: flex-start; gap: 14px;
+    padding: 15px 16px; border-radius: 16px; cursor: pointer;
+    background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08);
+    transition: border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .06s ease;
+  }
+  .consent-item:hover { border-color: rgba(103,232,249,.35); background: rgba(255,255,255,.055); }
+  .consent-item:active { transform: scale(.995); }
+  .consent-item.is-on {
+    border-color: rgba(52,211,153,.5); background: rgba(52,211,153,.09);
+    box-shadow: 0 8px 24px rgba(52,211,153,.14);
+  }
+  .consent-native { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
+  .consent-box {
+    flex: 0 0 auto; width: 22px; height: 22px; margin-top: 1px; border-radius: 7px;
+    display: grid; place-items: center; color: #04121a;
+    border: 1.5px solid rgba(255,255,255,.28); background: rgba(2,6,23,.55);
+    transition: background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .consent-box > svg { opacity: 0; transform: scale(.55); transition: opacity .18s ease, transform .18s ease; }
+  .consent-item.is-on .consent-box {
+    background: linear-gradient(145deg, #67e8f9, #34d399); border-color: transparent;
+    box-shadow: 0 4px 14px rgba(52,211,153,.4);
+  }
+  .consent-item.is-on .consent-box > svg { opacity: 1; transform: scale(1); }
+  .consent-native:focus-visible + .consent-box { outline: 2px solid #67e8f9; outline-offset: 2px; }
+  .consent-text { display: grid; gap: 3px; }
+  .consent-title { font-size: 14px; font-weight: 600; color: #e8eefc; line-height: 1.4; }
+  .consent-detail { font-size: 12.5px; color: #93a4c3; line-height: 1.5; }
+  .consent-link { color: #67e8f9; text-decoration: underline; text-underline-offset: 2px; }
+  .consent-link:hover { color: #a5f3fc; }
+  .consent-all {
+    margin-top: 4px;
+    background: linear-gradient(135deg, rgba(52,211,153,.12), rgba(103,232,249,.06));
+    border-color: rgba(52,211,153,.32);
+  }
+  .consent-all .consent-title { font-weight: 750; }
+  .consent-actions { margin-top: 24px; display: grid; gap: 10px; }
+  .consent-agree {
+    width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: 0; border-radius: 14px; padding: 15px; color: #04121a;
+    font: 800 14px Manrope, sans-serif; letter-spacing: .01em; cursor: pointer;
+    background: linear-gradient(135deg, #67e8f9, #34d399);
+    box-shadow: 0 12px 30px rgba(52,211,153,.28);
+    transition: transform .06s ease, box-shadow .2s ease, opacity .2s ease;
+  }
+  .consent-agree:hover:not(:disabled) { box-shadow: 0 16px 42px rgba(52,211,153,.42); }
+  .consent-agree:active:not(:disabled) { transform: translateY(1px); }
+  .consent-agree:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+  .consent-decline {
+    width: 100%; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(255,255,255,.16); border-radius: 14px; padding: 13px;
+    font: 700 13px Manrope, sans-serif; color: #9fb2d4; background: transparent; cursor: pointer;
+    transition: color .18s ease, border-color .18s ease, background .18s ease;
+  }
+  .consent-decline:hover { color: #e2e8f0; border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.03); }
+  .consent-fineprint { margin: 16px 2px 0; text-align: center; font-size: 11.5px; color: #6b7a99; line-height: 1.5; }
 
   /* ===== Proctoring debug overlay ===== */
   .debug-toggle {

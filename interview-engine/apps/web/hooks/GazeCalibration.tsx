@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CALIBRATION_POINTS, useGazeCalibration, type CalibrationResult } from './useGazeCalibration';
-
-const POOR_CALIBRATION_THRESHOLD = 0.4;
+import { MIN_OPPOSITE_EDGE_GAP_X, MIN_V_BAND_WIDTH } from './proctoringGazeThresholdsV3';
 
 type Props = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -119,7 +118,7 @@ function SamplingRing({ progress }: { progress: number }) {
 export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
   const { calState, startCalibration, beginPoints, abort } = useGazeCalibration(videoRef);
   const hasStarted = useRef(false);
-  const calibrationIsPoor = Boolean(calState.result && calState.result.qualityScore < POOR_CALIBRATION_THRESHOLD);
+  const calibrationRejected = Boolean(calState.result && !calState.result.accepted);
 
   // Kick off MediaPipe load as soon as the component mounts
   useEffect(() => {
@@ -132,8 +131,11 @@ export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
   // When calibration finishes, surface result to parent
   useEffect(() => {
     if (calState.phase === 'done' && calState.result) {
-      if (calState.result.qualityScore < POOR_CALIBRATION_THRESHOLD) return;
-      // Give user 1.5 s to see the quality screen before closing
+      // Only proceed when the calibration is trustworthy. A rejected result (no face,
+      // closed eyes, or eyes that never moved to the dots) keeps the candidate on the
+      // quality screen with a reason and a Recalibrate button.
+      if (!calState.result.accepted) return;
+      // Give user a moment to see the quality screen before closing
       const t = setTimeout(() => onComplete(calState.result!), 2200);
       return () => clearTimeout(t);
     }
@@ -341,9 +343,10 @@ export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
             </div>
             <h2 style={{ margin: 0, fontSize: 20, color: '#f1f5f9' }}>Calibration complete</h2>
             <QualityBar score={calState.result.qualityScore} />
-            {calibrationIsPoor && (
+            {calibrationRejected && (
               <div style={{ maxWidth: 360, textAlign: 'center', fontSize: 13, lineHeight: 1.6, color: '#fca5a5' }}>
-                Calibration quality is too low to continue. Please keep your head still, move only your eyes, and recalibrate.
+                {calState.result.rejectionReason ??
+                  'Calibration could not be verified. Please keep your face in view, move only your eyes, and recalibrate.'}
               </div>
             )}
             <div
@@ -355,16 +358,26 @@ export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
                 color: '#475569',
               }}
             >
-              <span>Threshold X</span>
-              <span style={{ color: '#94a3b8' }}>{calState.result.thresholdX.toFixed(3)}</span>
-              <span>Threshold Y</span>
-              <span style={{ color: '#94a3b8' }}>{calState.result.thresholdY.toFixed(3)}</span>
-              <span>Neutral X</span>
-              <span style={{ color: '#94a3b8' }}>{calState.result.neutralX.toFixed(3)}</span>
-              <span>Neutral Y</span>
-              <span style={{ color: '#94a3b8' }}>{calState.result.neutralY.toFixed(3)}</span>
+              <span>Horizontal sweep</span>
+              <span style={{ color: calState.result.rangeX >= MIN_OPPOSITE_EDGE_GAP_X ? '#4ade80' : '#f87171' }}>
+                {calState.result.rangeX.toFixed(3)} ({calState.result.rangeX >= MIN_OPPOSITE_EDGE_GAP_X ? 'ok' : 'low'})
+              </span>
+              <span>Vertical sweep</span>
+              <span style={{ color: calState.result.vSweep >= MIN_V_BAND_WIDTH ? '#4ade80' : '#f87171' }}>
+                {calState.result.vSweep.toFixed(3)} ({calState.result.vSweep >= MIN_V_BAND_WIDTH ? 'ok' : 'low'})
+              </span>
+              <span>Vertical band</span>
+              <span style={{ color: '#94a3b8' }}>
+                [{calState.result.vTopEdge.toFixed(2)}, {calState.result.vBottomEdge.toFixed(2)}]
+              </span>
+              <span>Head pitch</span>
+              <span style={{ color: '#94a3b8' }}>{calState.result.headPitchDeg.toFixed(1)}°</span>
+              <span>Neutral / Threshold X</span>
+              <span style={{ color: '#94a3b8' }}>
+                {calState.result.neutralX.toFixed(2)} / {calState.result.thresholdX.toFixed(2)}
+              </span>
             </div>
-            {calibrationIsPoor ? (
+            {calibrationRejected ? (
               <button
                 onClick={startCalibration}
                 style={{

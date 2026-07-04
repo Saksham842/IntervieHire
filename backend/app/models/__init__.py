@@ -2,7 +2,7 @@ from app.models.user import User, UserStatus, UserType
 from app.models.organisation import Organisation
 from app.models.job import Job, JobStatus, JobCollaborator
 from app.models.applicant import Applicant, InterviewStatus, CheatProbability, ApplicantSource
-from app.models.ai_integration import Company, Candidate, JobRole, Question, InterviewSession, ProctoringLog
+from app.models.ai_integration import Company, Candidate, JobRole, Question, InterviewSession, ProctoringLog, ConsentLog
 from app.models.interview_report import InterviewReport
 from app.models.interview_invite import InterviewInvite, InviteStatus
 # Talent Finder (AI sourcing) tables — imported so Base.metadata.create_all

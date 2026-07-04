@@ -182,3 +182,28 @@ model ProctoringLog {
 
   @@index([sessionId, severity])
 }
+
+// Immutable audit trail ("security log") of candidate consent decisions:
+// informed consent to a recorded, AI-evaluated interview, explicit biometric
+// consent (face/gaze/voice), 18+ attestation, and privacy-policy + cookies
+// acknowledgment. Written from the candidate room BEFORE any capture starts,
+// and complements the client-side localStorage proof. Deliberately NOT related
+// to InterviewSession with a cascade: a consent/security log must survive
+// deletion of the interview data (security logs are retained longer than the
+// interview itself), so sessionId is a plain indexed string, not a FK.
+model ConsentLog {
+  id             String   @id @default(cuid())
+  sessionId      String
+  action         String   // 'granted' | 'declined'
+  consentVersion String
+  scopes         Json     @default("{}") // { age18Plus, dataProcessing, biometric, privacyPolicy, cookies }
+  candidateEmail String?
+  candidateName  String?
+  inviteToken    String?
+  userAgent      String?
+  ipAddress      String?
+  locale         String?
+  createdAt      DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+}

@@ -5,7 +5,7 @@ import { GazeCalibration } from '@/hooks/GazeCalibration';
 import { useProctoring } from '@/hooks/useProctoring';
 import { useSpeechMetrics } from '@/hooks/useSpeechMetrics';
 import { useTranscript } from '@/hooks/useTranscript';
-import { MonitorUp, ShieldCheck, Video } from 'lucide-react';
+import { Check, Mic, MonitorUp, ShieldCheck, Video } from 'lucide-react';
 import type { CalibrationResult } from '@/hooks/useGazeCalibration';
 import { roomStyles } from './roomStyles';
 import { WaitingRoom } from './WaitingRoom';
@@ -16,6 +16,11 @@ const AVATAR_URL = process.env.NEXT_PUBLIC_AVATAR_URL || 'http://localhost:80';
 // lobby unlocks and the engine's /start accepts a start once inside this window.
 // MUST stay in sync with EARLY_ENTRY_MS in the engine interview.routes.ts.
 const EARLY_ENTRY_MS = 10 * 60 * 1000;
+// Bump when the consent wording materially changes so prior consents re-prompt.
+const CONSENT_VERSION = '2026-07-01';
+// Where the candidate reads the full privacy policy (linked from the consent
+// gate). Override per-deployment; falls back to the marketing-site path.
+const PRIVACY_URL = process.env.NEXT_PUBLIC_PRIVACY_URL || 'https://www.interviehire.com/privacy';
 
 function withPixelStreamingParams(rawUrl: string) {
   try {
@@ -25,6 +30,21 @@ function withPixelStreamingParams(rawUrl: string) {
     return url.toString();
   } catch {
     return rawUrl;
+  }
+}
+
+// Whether this session already has a matching, still-current "granted" consent
+// stored locally. Only a matching-version grant counts; older wording or a
+// decline re-prompts. Used to restore consent WITHOUT flashing the gate.
+function hasStoredConsent(id: string): boolean {
+  if (typeof window === 'undefined' || !id) return false;
+  try {
+    const raw = localStorage.getItem(`ih_consent_${id}`);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return parsed?.consentVersion === CONSENT_VERSION && parsed?.action === 'granted';
+  } catch {
+    return false;
   }
 }
 
@@ -95,6 +115,31 @@ export default function Interview() {
   const [scheduleChecked, setScheduleChecked] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
+  // --- Informed-consent gate (DPDP/GDPR): must precede ANY camera / mic /
+  // screen capture. Biometric (face+gaze+voice) gets its own explicit consent;
+  // 18+, recording+AI, privacy policy and cookies are captured alongside it, and
+  // the decision is persisted server-side as a security log. ---
+  const [consentGiven, setConsentGiven] = useState(false);
+  const [consentDeclined, setConsentDeclined] = useState(false);
+  // Whether we've had a chance to restore a prior consent from localStorage.
+  // The consent gate stays hidden (behind a neutral loader) until this flips, so
+  // a returning, already-consented candidate never sees the gate flash on load.
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [isAdult, setIsAdult] = useState(false);
+  const [agreeData, setAgreeData] = useState(false);
+  const [agreeBiometric, setAgreeBiometric] = useState(false);
+  const [agreePrivacy, setAgreePrivacy] = useState(false);
+  const [agreeCookies, setAgreeCookies] = useState(false);
+
+  // --- Pre-interview permission gate (after consent). Prompts fire only when the
+  // candidate clicks "Grant required access" — never silently on load. All three
+  // (camera, microphone, screen share) must be granted, then an explicit click
+  // proceeds into the interview. ---
+  const [permissionsRequested, setPermissionsRequested] = useState(false);
+  const [micGranted, setMicGranted] = useState(false);
+  const [micDenied, setMicDenied] = useState(false);
+  const [permissionsAcknowledged, setPermissionsAcknowledged] = useState(false);
+
   // Live interviewer questions. "Lina" (the Convai/UE avatar) asks her own
   // questions; we surface what she ACTUALLY asked by polling the server
   // transcript (her tab-audio → Deepgram, speaker:'interviewer'). Only populated
@@ -158,10 +203,24 @@ export default function Interview() {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const queryId = params.get('sessionId') || params.get('session');
-    if (queryId) setSessionId(queryId);
     const token = params.get('ih_invite') || params.get('token');
     if (token) inviteTokenRef.current = token;
+    // Resolve the real session id first, then restore any prior consent for it —
+    // both in this one effect run so the "already agreed" state lands in a single
+    // render. Setting consentChecked here (never before) is what keeps the gate
+    // hidden until we've decided, so a returning candidate sees no flash.
+    const resolvedId = queryId || 'demo-session';
+    if (queryId) setSessionId(queryId);
+    if (hasStoredConsent(resolvedId)) setConsentGiven(true);
+    setConsentChecked(true);
   }, []);
+
+  // Re-restore consent if the session id changes AFTER mount (e.g. the demo
+  // bootstrap swaps in a real id). This can only reveal a prior consent — it
+  // never re-shows the gate — so it can't cause the flash we just fixed.
+  useEffect(() => {
+    if (hasStoredConsent(sessionId)) setConsentGiven(true);
+  }, [sessionId]);
 
   // Load per-job interview settings + company branding for a real session. Best
   // effort: on any failure we stay permissive so the interview still runs.
@@ -276,7 +335,10 @@ export default function Interview() {
   }, [sessionId]);
 
   // --- Proctoring engine (all features) ---
-  const { videoRef, events, state, requestRequiredPermissions, startProctoringSession, endProctoringSession, getScreenAudioStream } = useProctoring(sessionId, socket, calibration);
+  // Gate proctoring on consent AND an explicit permission request: no camera/mic/
+  // screen capture or model loading happens until the candidate has agreed in the
+  // consent gate AND clicked "Grant required access" in the permission gate below.
+  const { videoRef, events, state, requestRequiredPermissions, startProctoringSession, endProctoringSession, getScreenAudioStream, screenShareError } = useProctoring(sessionId, socket, calibration, consentGiven && permissionsRequested);
 
   // --- Lock scroll to a fullscreen room while mounted ---
   useEffect(() => {
@@ -485,10 +547,163 @@ export default function Interview() {
     setCamOn(next);
   }
 
+  // --- Informed-consent gate handlers ---
+  const consentComplete = isAdult && agreeData && agreeBiometric && agreePrivacy && agreeCookies;
+
+  // "Select all" master toggle — tick/untick every consent at once.
+  function setAllConsents(value: boolean) {
+    setIsAdult(value);
+    setAgreeData(value);
+    setAgreeBiometric(value);
+    setAgreePrivacy(value);
+    setAgreeCookies(value);
+  }
+
+  // The consent options shown in the gate. Fewer checkboxes for the candidate,
+  // but each still maps to the individual per-purpose flags persisted in the DB
+  // (age / privacy / cookies / recording+AI / biometric) so the audit trail stays
+  // granular. Biometric is kept as its OWN checkbox — GDPR Art. 9 / BIPA require a
+  // separate, specific consent for it, so it must not be bundled with the others.
+  const consentItems = [
+    {
+      key: 'eligibility',
+      checked: isAdult && agreePrivacy && agreeCookies,
+      onChange: (v: boolean) => {
+        setIsAdult(v);
+        setAgreePrivacy(v);
+        setAgreeCookies(v);
+      },
+      title: (
+        <>
+          I am 18 or older and agree to the{' '}
+          <a
+            href={PRIVACY_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="consent-link"
+            onClick={(e) => e.stopPropagation()}
+          >
+            Privacy Policy
+          </a>
+        </>
+      ),
+      detail: 'Under-18 candidates need verifiable parental/guardian consent. Includes the strictly-necessary cookies and local storage used to run this interview and remember your consent.',
+    },
+    {
+      key: 'data',
+      checked: agreeData,
+      onChange: (v: boolean) => setAgreeData(v),
+      title: 'I consent to this interview being recorded and evaluated by AI',
+      detail: 'Your answers (transcript and recording) are processed and may be handled by service providers outside India.',
+    },
+    {
+      key: 'biometric',
+      checked: agreeBiometric,
+      onChange: (v: boolean) => setAgreeBiometric(v),
+      title: 'I explicitly consent to the processing of my biometric data',
+      detail: 'Facial-geometry / landmark, gaze, and voice data are captured for interview-integrity monitoring (proctoring). This is a separate, specific consent.',
+    },
+  ];
+
+  function buildConsentRecord(action: 'granted' | 'declined') {
+    return {
+      sessionId,
+      action,
+      consentVersion: CONSENT_VERSION,
+      // Per-purpose consent so each can be audited (and later withdrawn) on its own.
+      scopes: {
+        age18Plus: isAdult,
+        dataProcessing: agreeData, // recording + AI evaluation + cross-border processing
+        biometric: agreeBiometric, // face-geometry / gaze / voice
+        privacyPolicy: agreePrivacy,
+        cookies: agreeCookies, // strictly-necessary cookies + local storage
+      },
+      inviteToken: inviteTokenRef.current || undefined,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      locale: typeof navigator !== 'undefined' ? navigator.language : undefined,
+      grantedAt: new Date().toISOString(),
+    };
+  }
+
+  // Persist the decision to the server security log. Best effort: the localStorage
+  // record is the immediate proof and the gate still blocks capture, so a network
+  // blip must never trap a consenting candidate behind a failed request.
+  function persistConsent(record: ReturnType<typeof buildConsentRecord>) {
+    try {
+      fetch(`${API_URL}/api/interview/consent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+        keepalive: true,
+      }).catch(() => { /* logged server-side is best-effort */ });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Record informed consent before any capture begins: client-side proof
+  // (version + timestamp + scope) plus the server security log.
+  function grantConsent() {
+    if (!consentComplete) return;
+    const record = buildConsentRecord('granted');
+    try {
+      localStorage.setItem(`ih_consent_${sessionId}`, JSON.stringify(record));
+    } catch {
+      /* non-fatal: gate still blocks capture below */
+    }
+    persistConsent(record);
+    setConsentGiven(true);
+  }
+
+  // Log the decline too (audit trail: the candidate was offered and refused) —
+  // then show the "nothing recorded" screen; capture never starts.
+  function declineConsent() {
+    persistConsent(buildConsentRecord('declined'));
+    setConsentDeclined(true);
+  }
+
   // --- Permission gate state ---
   const cameraReady = state.cameraActive && !state.permissionDenied;
+  const micReady = micGranted;
   const screenShareReady = !state.screenShareSupported || state.screenShareReadyBeforeInterview;
-  const permissionsReadyForCalibration = cameraReady && screenShareReady;
+  const allPermissionsReady = cameraReady && micReady && screenShareReady;
+
+  // Prompt for camera + microphone + screen share only after the candidate asks
+  // for it via the "Grant required access" button — never silently on load. Each
+  // click re-requests ONLY the permissions still missing, so a candidate who
+  // denied one can click again to be re-prompted. (This re-prompts when the
+  // earlier denial was a dismiss; a hard browser "Block" can only be undone from
+  // the browser's site settings — the gate message guides that case.)
+  async function grantAllPermissions() {
+    // Screen share + fullscreen (only if not already shared). getDisplayMedia must
+    // run inside the click gesture, so kick it off first and synchronously.
+    const screenPromise = screenShareReady
+      ? Promise.resolve()
+      : Promise.resolve(requestRequiredPermissions()).catch(() => {});
+    // Microphone (only if not already granted). Release the track immediately — the
+    // transcript layer re-opens the mic when the interview starts; we only need the
+    // granted permission here.
+    let micPromise: Promise<unknown> = Promise.resolve();
+    if (!micReady) {
+      setMicDenied(false);
+      micPromise = navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((s) => { s.getTracks().forEach((t) => t.stop()); setMicGranted(true); })
+        .catch(() => { setMicGranted(false); setMicDenied(true); });
+    }
+    // Camera (only if not already active). It's acquired by the proctoring effect
+    // when proctoringEnabled flips true. First request: flip false->true. Retry
+    // (already requested but still not active): toggle off->on so the effect
+    // re-runs and the browser is asked again.
+    if (!cameraReady) {
+      if (permissionsRequested) {
+        setPermissionsRequested(false);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      setPermissionsRequested(true);
+    }
+    await Promise.allSettled([screenPromise, micPromise]);
+  }
 
   // --- Live integrity computation ---
   const activeViolation = useMemo(() => {
@@ -518,6 +733,16 @@ export default function Interview() {
   const mobileBlocked = !!interviewSettings && interviewSettings.allowMobile === false && isMobileDevice;
   const wl = !!(interviewSettings && interviewSettings.whiteLabel && branding);
 
+  // Whole-screen proctoring relies on MediaTrackSettings.displaySurface, which
+  // Firefox and Safari don't expose (and their "share window" is visually a full
+  // screen), so those browsers can't be reliably proctored. Require a Chromium
+  // browser (Chrome, Edge, Brave, Opera, …), which reports displaySurface.
+  const isUnsupportedBrowser =
+    typeof navigator !== 'undefined' &&
+    (/firefox\/|fxios\//i.test(navigator.userAgent) ||
+      (/safari\//i.test(navigator.userAgent) &&
+        !/chrome\/|chromium\/|crios\/|edg[a-z]*\//i.test(navigator.userAgent)));
+
   if (mobileBlocked) {
     return (
       <>
@@ -527,6 +752,20 @@ export default function Interview() {
             <p className="gate-eyebrow">Desktop required</p>
             <h1 className="gate-title">Please switch to a desktop</h1>
             <p className="gate-sub">This interview must be taken on a desktop or laptop. Open this link on a computer to continue.</p>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (isUnsupportedBrowser) {
+    return (
+      <>
+        <style>{roomStyles}</style>
+        <div className="gate">
+          <div className="gate-card" style={{ textAlign: 'center' }}>
+            <p className="gate-eyebrow">Unsupported browser</p>
+            <h1 className="gate-title">Open in Chrome or Edge</h1>
           </div>
         </div>
       </>
@@ -575,64 +814,191 @@ export default function Interview() {
         </div>
       )}
 
-      {/* Pre-interview permission gate */}
-      {!calibration && !permissionsReadyForCalibration && (
+      {/* Neutral cover while we restore any prior consent from localStorage.
+          Covers the room so neither the consent gate nor the interview flashes
+          before we know whether this candidate already agreed. */}
+      {!startError && !consentChecked && (
+        <div className="gate">
+          <div className="gate-card" style={{ textAlign: 'center' }}>
+            <div className="gate-spinner" />
+            <p className="gate-sub">Preparing your interview…</p>
+          </div>
+        </div>
+      )}
+
+      {/* Informed-consent gate — must precede ANY camera / mic / screen capture */}
+      {!startError && consentChecked && !consentGiven && !consentDeclined && (
+        <div className="gate">
+          <div className="gate-card consent-card">
+            <div className="consent-badge"><ShieldCheck size={24} /></div>
+            <p className="gate-eyebrow" style={{ marginTop: 16 }}>Before you begin</p>
+            <h1 className="gate-title">Consent to a recorded, AI-evaluated interview</h1>
+            <p className="gate-sub">
+              This interview uses your <strong>camera</strong> (face &amp; gaze), your{' '}
+              <strong>microphone</strong> (recorded &amp; transcribed), and records short clips if
+              monitoring flags an issue. Your answers are <strong>evaluated by AI</strong> and may be
+              processed by providers <strong>outside India</strong>. You can withdraw consent or
+              request deletion afterwards.
+            </p>
+            <div className="consent-list">
+              {consentItems.map((item) => (
+                <label key={item.key} className={`consent-item${item.checked ? ' is-on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    className="consent-native"
+                    checked={item.checked}
+                    onChange={(e) => item.onChange(e.target.checked)}
+                  />
+                  <span className="consent-box"><Check size={14} strokeWidth={3} /></span>
+                  <span className="consent-text">
+                    <span className="consent-title">{item.title}</span>
+                    <span className="consent-detail">{item.detail}</span>
+                  </span>
+                </label>
+              ))}
+              {/* Select all — tick every consent at once (unticking clears them). */}
+              <label className={`consent-item consent-all${consentComplete ? ' is-on' : ''}`}>
+                <input
+                  type="checkbox"
+                  className="consent-native"
+                  checked={consentComplete}
+                  onChange={(e) => setAllConsents(e.target.checked)}
+                />
+                <span className="consent-box"><Check size={14} strokeWidth={3} /></span>
+                <span className="consent-text">
+                  <span className="consent-title">Select all</span>
+                  <span className="consent-detail">Agree to everything above at once.</span>
+                </span>
+              </label>
+            </div>
+            <div className="consent-actions">
+              <button onClick={grantConsent} disabled={!consentComplete} className="consent-agree">
+                <ShieldCheck size={18} /> I agree — continue
+              </button>
+              <button onClick={declineConsent} className="consent-decline">
+                I do not consent
+              </button>
+            </div>
+            <p className="consent-fineprint">
+              Your choice is recorded securely (consent v{CONSENT_VERSION}). Nothing is captured until you agree.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Consent declined — capture never starts */}
+      {!startError && consentDeclined && (
+        <div className="gate">
+          <div className="gate-card consent-card" style={{ textAlign: 'center' }}>
+            <p className="gate-eyebrow">Interview not started</p>
+            <h1 className="gate-title">You declined consent</h1>
+            <p className="gate-sub">
+              We can&apos;t run a camera-based interview without your consent, so nothing has been
+              recorded. If this was a mistake, review the consent options again, or contact the
+              recruiter about an alternative.
+            </p>
+            <div className="consent-actions">
+              <button onClick={() => setConsentDeclined(false)} className="consent-agree">
+                Review consent again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-interview permission gate — prompts fire only on the button click */}
+      {consentGiven && !calibration && !permissionsAcknowledged && (
         <div className="gate">
           <div className="gate-card">
             <p className="gate-eyebrow">Pre-interview access</p>
-            <h1 className="gate-title">Grant access before gaze calibration</h1>
+            <h1 className="gate-title">Grant camera, microphone &amp; screen access</h1>
             <p className="gate-sub">
-              Camera and screen sharing are checked now. Gaze calibration starts only after these are ready.
+              Click <strong>Grant required access</strong> — your browser will then ask for each
+              permission one by one. All three must be granted before you can start the interview.
             </p>
             <div className="gate-checks">
               {[
                 {
                   label: 'Camera',
                   ok: cameraReady,
-                  detail: state.permissionDenied
-                    ? 'Permission denied'
-                    : state.cameraActive
+                  detail: cameraReady
                     ? 'Ready'
-                    : 'Waiting for browser permission',
+                    : state.permissionDenied
+                    ? 'Permission denied — allow it in your browser, then retry'
+                    : permissionsRequested
+                    ? 'Waiting for browser permission…'
+                    : 'Not requested yet',
                   Icon: Video,
+                },
+                {
+                  label: 'Microphone',
+                  ok: micReady,
+                  detail: micReady
+                    ? 'Ready'
+                    : micDenied
+                    ? 'Permission denied — allow it in your browser, then retry'
+                    : permissionsRequested
+                    ? 'Waiting for browser permission…'
+                    : 'Not requested yet',
+                  Icon: Mic,
                 },
                 {
                   label: 'Screen share',
                   ok: screenShareReady,
                   detail: !state.screenShareSupported
                     ? 'Unavailable in this browser'
-                    : state.screenShareReadyBeforeInterview
+                    : screenShareReady
                     ? 'Ready'
-                    : 'Required before calibration',
+                    : permissionsRequested
+                    ? 'Choose a screen or tab to share…'
+                    : 'Not requested yet',
                   Icon: MonitorUp,
                 },
               ].map(({ label, ok, detail, Icon }) => (
                 <div key={label} className="gate-check">
                   <div className="gate-check-l">
-                    <Icon size={18} className={ok ? 'ok-ico' : 'wait-ico'} />
+                    <Icon size={18} className={ok ? 'ok-ico' : 'bad-ico'} />
                     <div>
                       <p className="gate-check-label">{label}</p>
-                      <p className="gate-check-detail">{detail}</p>
+                      <p className={`gate-check-detail${ok ? '' : ' is-bad'}`}>{detail}</p>
                     </div>
                   </div>
-                  <span className={`gate-dot ${ok ? 'is-ok' : 'is-wait'}`} />
+                  <span className={`gate-dot ${ok ? 'is-ok' : 'is-bad'}`} />
                 </div>
               ))}
             </div>
-            <button onClick={() => requestRequiredPermissions()} className="gate-btn">
-              <ShieldCheck size={18} /> Grant required access
-            </button>
-            {state.permissionDenied && (
+            {screenShareError && !screenShareReady && (
+              <p className="gate-error" role="alert" style={{ color: '#dc2626', fontSize: 13, margin: '10px 0 0' }}>
+                {screenShareError}
+              </p>
+            )}
+            {allPermissionsReady ? (
+              <button onClick={() => setPermissionsAcknowledged(true)} className="gate-btn">
+                <ShieldCheck size={18} /> All set — start the interview
+              </button>
+            ) : (
+              <button onClick={grantAllPermissions} className="gate-btn">
+                <ShieldCheck size={18} /> Grant required access
+              </button>
+            )}
+            {(state.permissionDenied || micDenied) && (
               <p className="gate-error">
-                Camera access was denied. Allow camera access in your browser settings, then refresh this page.
+                {state.permissionDenied && micDenied
+                  ? 'Camera and microphone access were denied.'
+                  : state.permissionDenied
+                  ? 'Camera access was denied.'
+                  : 'Microphone access was denied.'}{' '}
+                Click <strong>Grant required access</strong> to try again. If no prompt appears, click
+                the 🔒 icon in your browser&apos;s address bar, set Camera/Microphone to <em>Allow</em>,
+                then click Grant required access again.
               </p>
             )}
           </div>
         </div>
       )}
 
-      {/* Gaze calibration */}
-      {!calibration && permissionsReadyForCalibration && (
+      {/* Gaze calibration — only after the candidate clicks to proceed */}
+      {consentGiven && !calibration && permissionsAcknowledged && (
         <GazeCalibration
           videoRef={videoRef}
           onComplete={setCalibration}
@@ -644,6 +1010,16 @@ export default function Interview() {
               neutralY: 0,
               pointData: [],
               qualityScore: 0,
+              accepted: true,
+              rejectionReason: null,
+              rangeX: 0,
+              rangeY: 0,
+              // Zero-config: no vertical sweep → the guard falls back to the default band and seeds the
+              // live pitch baseline from the first live frame (headPitchDeg is ignored when untrusted).
+              vTopEdge: 0,
+              vBottomEdge: 0,
+              vSweep: 0,
+              headPitchDeg: 0,
             })
           }
         />

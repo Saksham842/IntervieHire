@@ -6,6 +6,7 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-07-01** — Added candidate consent audit log ("security log"): new `ConsentLog` table (Prisma model in `interview-engine/apps/api` + mirrored SQLAlchemy model in `backend/app/models/ai_integration.py`) and two new Fastify routes on the interview engine (`interview-engine/apps/api/src/routes/interview.routes.ts`, prefix `/api/interview`) — **POST /api/interview/consent** (public, rate-limited; records one grant/decline for a session — body `sessionId`+`consentVersion` required, `action` default 'granted', optional `scopes`/`candidateEmail`/`candidateName`/`inviteToken`/`userAgent`/`locale`; `ipAddress` captured server-side from X-Forwarded-For/`req.ip`, never accepted from the body; returns `{ ok, id, createdAt }`; 400 when `sessionId`/`consentVersion` missing) and **GET /api/interview/consent/:sessionId** (public, rate-limited; returns `{ sessionId, count, records: ConsentLog[] }`, newest-first, max 20). The candidate room's informed-consent gate (18+, recording+AI, biometric, privacy policy, cookies) now persists each grant/decline server-side. New table `ConsentLog` (id cuid PK, sessionId string [indexed], action string, consentVersion string, scopes jsonb default `{}`, candidateEmail/candidateName/inviteToken/userAgent/ipAddress/locale nullable strings, createdAt timestamp default now; composite index on (sessionId, createdAt); intentionally NO foreign key to InterviewSession so the audit log survives session deletion).
 - **2026-07-01** — Scheduled-slot barrier ("waiting room" lobby). **Interview Engine** (Fastify `interview.routes.ts`): **POST /api/interview/sessions/:id/start** gained a new `TOO_EARLY` gate — request/response schema UNCHANGED, one new 403 error code. When the session has a `scheduledAt` and `Date.now() < scheduledAt − 10min` (`EARLY_ENTRY_MS`), start is rejected with 403 `{ "error": "This interview has not opened yet. Please return at your scheduled time.", "code": "TOO_EARLY" }`. The guard is UNCONDITIONAL on any scheduled session (not gated behind a setting), and runs after the token/INVITE and the existing INTERVIEW_DISABLED/NO_REATTEMPT/LATE_ATTEMPT checks; sessions with no `scheduledAt` (plain link / demo) are unaffected. **Candidate room** (`interview-engine/apps/web/app/interviewcandidateroom/page.tsx` + new `WaitingRoom.tsx`): reads `scheduledAt` from **GET /api/interview/sessions/:id** and, when it is more than `EARLY_ENTRY_MS` in the future, renders a countdown lobby + auto-advancing UI-guide slideshow instead of the permission gate, auto-unlocking at `scheduledAt − 10min` (kept in sync with the server constant). No new HTTP routes; documented for the new `/start` error code.
 - **2026-07-01** — Made every field of `OrganisationIn` optional on **PUT /api/organisation** and **POST /api/organisation** (`backend/app/schemas.py`): `org_name` changed from required `str` to `Optional[str] = None` (all other fields were already optional). Auth, response schema (`OrganisationOut`), and handler logic are UNCHANGED. Fixes the Career Page settings save (`apiUpdateOrganisation({ career_subdomain, career_intro })` in `dashboard/src/dashboard/api.js`), which sends only the two career fields and previously got **422 "org_name field required"**; the upsert's update branch already applies `model_dump(exclude_unset=True)`, so omitted fields (incl. `org_name`) are left untouched. Onboarding's separate `OnboardingIn` (POST /api/auth/onboarding) still requires `org_name`, so org creation is unaffected.
 - **2026-06-30** — Added **POST /api/jobs/{job_id}/duplicate** (`backend/app/routers/jobs.py`) — auth required; no request body; path param `job_id`:UUID; gated by `_verify_job_access` (404 if the job is not found or not in the caller's active org). Deep-copies the source job's config into a NEW independent job that is `status=draft` and `is_job_listed=false`, with `custom_job_id` reset to null and title suffixed " (Copy)"; also snapshots EVERY applicant (name/email/phone, resume data, all stage flags, screening/functional status+score, decision, report_url, scores) EXCEPT each copy's `scheduling_token` and `calendar_event_id` are reset to null (live single-use handles). The creator is added as a `JobCollaborator`. Returns 200 with a `JobDetailOut` body (same schema as **GET /api/jobs/{job_id}**). Also (NO schema change): **PATCH /api/jobs/{job_id}/settings** (`JobSettingsIn`) is now invoked by the dashboard "Edit Posting" flow to persist `title` / `custom_job_id` / `tags`.
@@ -3077,6 +3078,83 @@ Response:
 Status codes: 200 OK (file stream); 404 'Not found' (file missing); 429 rate limited.
 
 Notes: No Fastify schema. Path = path.join(process.cwd(),'uploads',file). No explicit Content-Type set; no path-traversal sanitization on :file.
+
+#### POST /api/interview/consent
+
+Records one candidate consent decision (grant or decline) for a session into the append-only `ConsentLog` audit table. Backs the candidate room's informed-consent gate (18+, recording+AI, biometric, privacy policy, cookies) — each grant/decline is persisted server-side.
+
+- **Auth:** Public (candidate is unauthenticated; no preHandler, no api key). Subject to the global @fastify/rate-limit (max 200/min).
+- **Path params:** none
+- **Query params:** none
+
+Request: application/json
+```
+{
+  sessionId: string,          // required; empty/missing → 400
+  consentVersion: string,     // required; empty/missing → 400
+  action?: string,            // optional, default 'granted' — one of 'granted' | 'declined'; any value other than exactly 'declined' is stored as 'granted'
+  scopes?: object,            // optional, default {} — expected boolean keys: age18Plus, dataProcessing, biometric, privacyPolicy, cookies
+  candidateEmail?: string,    // optional
+  candidateName?: string,     // optional
+  inviteToken?: string,       // optional
+  userAgent?: string,         // optional — falls back to the request's User-Agent header when omitted
+  locale?: string             // optional
+}
+// NOTE: ipAddress is NOT accepted from the body — it is captured server-side from the X-Forwarded-For header (first hop) or req.ip.
+```
+
+Response:
+```
+200 OK (application/json)
+{
+  ok: true,
+  id: string,          // ConsentLog.id (cuid)
+  createdAt: string     // ISO 8601 datetime
+}
+```
+
+Status codes: 200 OK; 400 `{ "error": "sessionId and consentVersion are required" }` when `sessionId` or `consentVersion` is missing/empty; 429 rate limited; 500 on Prisma/DB error.
+
+Notes: No Fastify schema. Creates one `ConsentLog` row (no foreign key to InterviewSession by design, so the log survives session deletion). `action` is normalized to 'granted' unless it is exactly 'declined'. `scopes` defaults to `{}`. `ipAddress` is server-captured (first X-Forwarded-For hop, else `req.ip`) and is never taken from the request body.
+
+#### GET /api/interview/consent/:sessionId
+
+Returns the consent audit trail for a session — the most-recent `ConsentLog` records (newest first, capped at 20).
+
+- **Auth:** Public. Global rate limit (max 200/min).
+- **Path params:** `sessionId`:string — the interview session id
+- **Query params:** none
+
+Request: none
+
+Response:
+```
+200 OK (application/json)
+{
+  sessionId: string,
+  count: number,           // number of records returned (≤ 20)
+  records: ConsentLog[]    // ordered newest-first, max 20
+}
+
+ConsentLog {
+  id: string,                       // cuid
+  sessionId: string,
+  action: string,                   // 'granted' | 'declined'
+  consentVersion: string,
+  scopes: object,                   // e.g. { age18Plus, dataProcessing, biometric, privacyPolicy, cookies }
+  candidateEmail: string | null,
+  candidateName: string | null,
+  inviteToken: string | null,
+  userAgent: string | null,
+  ipAddress: string | null,
+  locale: string | null,
+  createdAt: string                 // ISO 8601 datetime
+}
+```
+
+Status codes: 200 OK (`records` may be an empty array if no consent logged for the session); 429 rate limited; 500 on Prisma/DB error.
+
+Notes: No Fastify schema. `records` ordered by createdAt desc, take 20. `count` = records.length.
 
 ### `interview-engine/apps/api/src/routes/transcript.routes.ts`
 

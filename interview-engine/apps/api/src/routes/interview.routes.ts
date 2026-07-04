@@ -305,6 +305,54 @@ export async function interviewRoutes(app: FastifyInstance) {
     return { sessionId: session.id, companyId: company.id, roleId: role.id, candidateId: candidate.id };
   });
 
+  // ── Candidate consent audit log ("security log") ───────────────────────────
+  // Persist the candidate's informed-consent decision (granted / declined)
+  // recorded by the consent gate in the candidate room BEFORE any camera / mic /
+  // recording starts. This is the server-side, durable record of biometric,
+  // recording+AI, 18+, privacy-policy and cookies consent — the client also
+  // keeps a localStorage proof, but this row is the authoritative audit trail.
+  // Unauthenticated by design (candidates are not logged-in users); rate limited
+  // by the global plugin. The client IP + User-Agent are captured server-side.
+  app.post('/consent', async (req:any, reply:any) => {
+    const b = req.body ?? {};
+    const sessionId = String(b.sessionId ?? '').trim();
+    const consentVersion = String(b.consentVersion ?? '').trim();
+    const action = b.action === 'declined' ? 'declined' : 'granted';
+    if (!sessionId || !consentVersion) {
+      return reply.code(400).send({ error: 'sessionId and consentVersion are required' });
+    }
+    const scopes = (b.scopes && typeof b.scopes === 'object' && !Array.isArray(b.scopes)) ? b.scopes : {};
+    const xff = req.headers['x-forwarded-for'];
+    const ipAddress =
+      (typeof xff === 'string' ? xff.split(',')[0].trim() : Array.isArray(xff) ? xff[0] : '') || req.ip || null;
+    const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null;
+    const record = await prisma.consentLog.create({
+      data: {
+        sessionId,
+        action,
+        consentVersion,
+        scopes,
+        candidateEmail: b.candidateEmail ? String(b.candidateEmail) : null,
+        candidateName: b.candidateName ? String(b.candidateName) : null,
+        inviteToken: b.inviteToken ? String(b.inviteToken) : null,
+        userAgent: b.userAgent ? String(b.userAgent) : ua,
+        ipAddress,
+        locale: b.locale ? String(b.locale) : null,
+      },
+    });
+    return { ok: true, id: record.id, createdAt: record.createdAt };
+  });
+
+  // Consent history for a session (newest first) — recruiter/audit verification.
+  app.get('/consent/:sessionId', async (req:any) => {
+    const records = await prisma.consentLog.findMany({
+      where: { sessionId: req.params.sessionId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    return { sessionId: req.params.sessionId, count: records.length, records };
+  });
+
   app.get('/sessions/:id', async (req:any, reply:any) => {
     const session = await prisma.interviewSession.findUnique({where:{id:req.params.id}, include:{company:true,candidate:true,jobRole:{include:{questions:true}},proctoringLogs:true}});
     // A token-bound session only reveals its config/questions to the matching token.

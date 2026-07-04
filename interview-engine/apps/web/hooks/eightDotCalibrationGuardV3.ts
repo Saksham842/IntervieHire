@@ -3,19 +3,18 @@ import {
   FALLBACK_GAZE_THRESHOLD_X,
   FALLBACK_GAZE_THRESHOLD_Y,
   MAX_CALIBRATION_DOT_STD_X,
-  MAX_CALIBRATION_DOT_STD_Y,
   MAX_SAFE_GAZE_THRESHOLD_X,
   MAX_SAFE_GAZE_THRESHOLD_Y,
   MAX_SAFE_NEUTRAL_X,
   MAX_SAFE_NEUTRAL_Y,
   MIN_DOT_DIRECTION_SEPARATION_X,
-  MIN_DOT_DIRECTION_SEPARATION_Y,
   MIN_OPPOSITE_EDGE_GAP_X,
-  MIN_OPPOSITE_EDGE_GAP_Y,
   MIN_SAFE_GAZE_THRESHOLD_X,
   MIN_SAFE_GAZE_THRESHOLD_Y,
   MIN_SAMPLES_PER_CALIBRATION_DOT,
+  MIN_V_BAND_WIDTH,
 } from './proctoringGazeThresholdsV3';
+import { deriveVerticalBand, DEFAULT_VERTICAL_BAND } from './gazeVerticalMath';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -32,6 +31,9 @@ type CalibrationLike = UnknownRecord & {
   neutralX?: number;
   neutralY?: number;
   pointData?: CalibrationPointLike[];
+  vTopEdge?: number;
+  vBottomEdge?: number;
+  headPitchDeg?: number;
 };
 
 type DotAxisDirection = 'left' | 'center' | 'right' | 'up' | 'down';
@@ -63,6 +65,14 @@ export type SafeEightDotCalibration = {
   thresholdY: number;
   neutralX: number;
   neutralY: number;
+  // Personalised on-screen vertical band (signed world-vertical gaze units). Live detection flags
+  // "down" when worldVertical > vBandBottom + margin and "up" when worldVertical < vBandTop - margin.
+  // NO sign is assumed (camera-at-top ⇒ both edges usually positive with vBandTop < vBandBottom).
+  vBandTop: number;
+  vBandBottom: number;
+  // Calibration head pitch (deterministic nose-vs-eye, chin-down positive, degrees) for seeding the
+  // live vertical baseline; null when no calibration is present.
+  headPitchDeg: number | null;
   trusted: boolean;
   reason: string;
   missingPointIds: string[];
@@ -257,7 +267,9 @@ function validateDotQuality(stats: DotStats[]) {
       return `Calibration dot ${stat.id} has too few valid samples`;
     }
 
-    if (stat.stdX > MAX_CALIBRATION_DOT_STD_X || stat.stdY > MAX_CALIBRATION_DOT_STD_Y) {
+    // Vertical stability is validated on the blendshape sweep (see the band-width check in
+    // validateEightDotCalibration); the iris stdY is eyelid-corrupted, so only gate on stdX here.
+    if (stat.stdX > MAX_CALIBRATION_DOT_STD_X) {
       return `Calibration dot ${stat.id} was unstable`;
     }
   }
@@ -279,7 +291,7 @@ function validateNeutral(neutralX: number, neutralY: number, centerStats: DotSta
   return null;
 }
 
-function validateDotGeometry(statsById: Map<string, DotStats>, centerX: number, centerY: number) {
+function validateDotGeometry(statsById: Map<string, DotStats>, centerX: number) {
   for (const expected of EIGHT_DOT_EXPECTATIONS) {
     const stat = statsById.get(expected.id);
     if (!stat) return `Missing calibration dot ${expected.id}`;
@@ -291,28 +303,16 @@ function validateDotGeometry(statsById: Map<string, DotStats>, centerX: number, 
     if (expected.x === 'right' && stat.meanX >= centerX - MIN_DOT_DIRECTION_SEPARATION_X) {
       return `Calibration dot ${expected.id} does not look right enough`;
     }
-
-    if (expected.y === 'up' && stat.meanY >= centerY - MIN_DOT_DIRECTION_SEPARATION_Y) {
-      return `Calibration dot ${expected.id} does not look up enough`;
-    }
-
-    if (expected.y === 'down' && stat.meanY <= centerY + MIN_DOT_DIRECTION_SEPARATION_Y) {
-      return `Calibration dot ${expected.id} does not look down enough`;
-    }
   }
 
   const leftAverage = mean(['tl', 'ml', 'bl'].map((id) => statsById.get(id)?.meanX ?? centerX));
   const rightAverage = mean(['tr', 'mr', 'br'].map((id) => statsById.get(id)?.meanX ?? centerX));
-  const topAverage = mean(['tl', 'tc', 'tr'].map((id) => statsById.get(id)?.meanY ?? centerY));
-  const bottomAverage = mean(['bl', 'bc', 'br'].map((id) => statsById.get(id)?.meanY ?? centerY));
 
-  // In this hook's geometry convention: positive X = looking left, positive Y = looking down.
+  // Horizontal iris convention: positive X = looking left. Vertical dot separation is validated on
+  // the blendshape band width (vBottomEdge − vTopEdge) in validateEightDotCalibration, because the
+  // iris meanY is eyelid-corrupted and unreliable for vertical.
   if (leftAverage - rightAverage < MIN_OPPOSITE_EDGE_GAP_X) {
     return 'Left and right calibration dots are not separated enough';
-  }
-
-  if (bottomAverage - topAverage < MIN_OPPOSITE_EDGE_GAP_Y) {
-    return 'Top and bottom calibration dots are not separated enough';
   }
 
   return null;
@@ -372,13 +372,25 @@ export function validateEightDotCalibration(calibration: CalibrationLike | null 
 
   const statsById = new Map(dotStats.map((stat) => [stat.id, stat]));
   const centerX = centerStats?.meanX ?? neutralX;
-  const centerY = centerStats?.meanY ?? neutralY;
-  const geometryFailure = validateDotGeometry(statsById, centerX, centerY);
+  const geometryFailure = validateDotGeometry(statsById, centerX);
 
   if (geometryFailure) {
     return {
       accepted: false,
       reason: geometryFailure,
+      missingPointIds: [],
+      dotStats,
+    };
+  }
+
+  // Vertical trust: the eyes must have swept vertically in the blendshape frame. Uses the same
+  // band-width floor as live personalisation, so `trusted` stays consistent with the live band.
+  const vTop = finiteNumber(calibration.vTopEdge);
+  const vBottom = finiteNumber(calibration.vBottomEdge);
+  if (vTop === null || vBottom === null || vBottom - vTop < MIN_V_BAND_WIDTH) {
+    return {
+      accepted: false,
+      reason: 'Top and bottom calibration dots are not separated enough',
       missingPointIds: [],
       dotStats,
     };
@@ -401,6 +413,9 @@ export function buildSafeEightDotCalibration(calibration: CalibrationLike | null
       thresholdY: FALLBACK_GAZE_THRESHOLD_Y,
       neutralX: 0,
       neutralY: 0,
+      vBandTop: DEFAULT_VERTICAL_BAND.vBandTop,
+      vBandBottom: DEFAULT_VERTICAL_BAND.vBandBottom,
+      headPitchDeg: null,
       trusted: false,
       reason: validation.reason,
       missingPointIds: validation.missingPointIds,
@@ -408,17 +423,22 @@ export function buildSafeEightDotCalibration(calibration: CalibrationLike | null
     };
   }
 
+  // Signed on-screen band from the top/bottom edge medians — NO sign assumption. deriveVerticalBand
+  // falls back to the default band when the sweep is degenerate/inverted/narrow, so live detection
+  // never hair-triggers on an untrustworthy calibration (mirrors the pre-existing "sanitize, don't
+  // disable" policy for the horizontal thresholds below).
+  const { vBandTop, vBandBottom } = deriveVerticalBand(calibration.vTopEdge, calibration.vBottomEdge);
+
   const rawThresholdX = finiteNumber(calibration.thresholdX) ?? FALLBACK_GAZE_THRESHOLD_X;
   const rawThresholdY = finiteNumber(calibration.thresholdY) ?? FALLBACK_GAZE_THRESHOLD_Y;
   const rawNeutralX = finiteNumber(calibration.neutralX) ?? 0;
   const rawNeutralY = finiteNumber(calibration.neutralY) ?? 0;
 
-  // Critical fix:
+  // Critical fix (horizontal, unchanged):
   // Do NOT disable live gaze detection just because the 8-dot validation failed.
-  // The previous version fell back to broad default thresholds when validation failed,
-  // which made gaze-away detection too insensitive. Instead, always use the current
-  // calibration values after sanitizing them with hard caps. The validation result is
-  // only exposed as metadata through `trusted` and `reason`.
+  // Always use the current calibration values after sanitizing them with hard caps. The validation
+  // result is only exposed as metadata through `trusted` and `reason`. (thresholdY is legacy/debug —
+  // vertical detection now uses the band above, not thresholdY.)
   return {
     thresholdX: clamp(
       rawThresholdX * CALIBRATION_THRESHOLD_SAFETY_FACTOR,
@@ -432,6 +452,9 @@ export function buildSafeEightDotCalibration(calibration: CalibrationLike | null
     ),
     neutralX: clamp(rawNeutralX, -MAX_SAFE_NEUTRAL_X, MAX_SAFE_NEUTRAL_X),
     neutralY: clamp(rawNeutralY, -MAX_SAFE_NEUTRAL_Y, MAX_SAFE_NEUTRAL_Y),
+    vBandTop,
+    vBandBottom,
+    headPitchDeg: finiteNumber(calibration.headPitchDeg),
     trusted: validation.accepted,
     reason: validation.accepted ? validation.reason : `Calibration sanitized: ${validation.reason}`,
     missingPointIds: validation.missingPointIds,

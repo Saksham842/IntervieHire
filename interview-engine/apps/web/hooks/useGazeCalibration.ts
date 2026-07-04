@@ -2,6 +2,11 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
+import {
+  MIN_OPPOSITE_EDGE_GAP_X,
+  MIN_V_BAND_WIDTH,
+} from './proctoringGazeThresholdsV3';
+import { evaluateCalibrationAcceptance, noseEyePitchDeg } from './gazeVerticalMath';
 
 const FACE_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
@@ -10,6 +15,16 @@ const FACE_MODEL_URL =
 const SAMPLES_PER_POINT = 20;
 // ms between each sample
 const SAMPLE_INTERVAL_MS = 80;
+
+// A sample whose |iris offset| exceeds this on either axis is physically implausible
+// for a face looking at the screen. It shows up when an eye is closed/blinking: the
+// eyelid landmarks collapse, the vertical normaliser (eye-open height) shrinks to the
+// clamp floor, and the offset explodes. Dropping these frames stops closed eyes from
+// masquerading as valid calibration data.
+const MAX_PLAUSIBLE_IRIS_OFFSET = 3.0;
+// Minimum eye-open height (normalised, image-height units) below which the eye is
+// treated as closed and the frame is dropped rather than dividing by the near-zero clamp.
+const MIN_EYE_OPEN_HEIGHT = 0.005;
 
 export type CalibrationPoint = {
   id: string;
@@ -31,7 +46,13 @@ export const CALIBRATION_POINTS: CalibrationPoint[] = [
   { id: 'br',  label: 'Bottom-right', xFrac: 1.0,  yFrac: 1.0 },
 ];
 
-type IrisSample = { offsetX: number; offsetY: number };
+// offsetX is the normalised iris-in-socket horizontal offset (the reliable calibration signal;
+// offsetY is kept for debug only — its eyelid-coupled vertical reading is no longer used).
+// eyeInHeadV is the blendshape vertical signal (eyeLookDown - eyeLookUp, >0 = down), the SAME
+// quantity live detection uses, sampled here so the on-screen band can be personalised from where
+// the candidate's eyes sit at the screen edges. headPitch is the deterministic nose-vs-eye head
+// pitch (chin-down positive, degrees) so calibration and live share one vertical frame.
+type IrisSample = { offsetX: number; offsetY: number; eyeInHeadV: number; headPitch: number };
 
 type PointSamples = {
   pointId: string;
@@ -47,8 +68,32 @@ export type CalibrationResult = {
   neutralY: number;
   // Per-point raw data (useful for debugging)
   pointData: PointSamples[];
-  // Sanity score 0-1: how much the edge points actually differ from center
+  // Magnitude-aware quality 0-1: combines sample coverage with how far the eyes
+  // actually swept across the dots. Unlike the old score, it is NOT scale-invariant.
   qualityScore: number;
+  // Whether the calibration is trustworthy enough to proceed. False when a face was
+  // not reliably present (no face / closed eyes) or the eyes did not actually move
+  // across the dots. The UI blocks completion and asks for a recalibration.
+  accepted: boolean;
+  // Human-readable reason shown to the candidate when `accepted` is false.
+  rejectionReason: string | null;
+  // Measured iris sweep (max-min of per-dot mean offset) across the perimeter dots.
+  // Surfaced for diagnosis/tuning against MIN_OPPOSITE_EDGE_GAP_X/Y.
+  rangeX: number;
+  rangeY: number;
+  // Personalised on-screen vertical band edges: the world-vertical gaze signal (eyeLookDown - eyeLookUp)
+  // measured while looking at the TOP and BOTTOM screen-edge dots. NO sign is assumed — for a
+  // camera-at-top rig the whole screen is below the lens, so BOTH edges are typically positive with
+  // vTopEdge < vBottomEdge. Live up/down detection is bounded by [vTopEdge, vBottomEdge] per candidate
+  // (see buildSafeEightDotCalibration/deriveVerticalBand), replacing the global blendshape thresholds.
+  vTopEdge: number;
+  vBottomEdge: number;
+  // Vertical sweep (vBottomEdge - vTopEdge): how far the eyes actually travelled vertically across the
+  // dots. Gates acceptance (the eyes must sweep) and surfaces on the completion screen.
+  vSweep: number;
+  // Median deterministic head pitch (nose-vs-eye, chin-down positive, degrees) during calibration.
+  // Live seeds its vertical head-pitch baseline from this so the band and live readings share a frame.
+  headPitchDeg: number;
 };
 
 export type CalibrationPhase =
@@ -75,6 +120,31 @@ function getFacePoint(
   return landmarks?.[index];
 }
 
+// Extracts a named blendshape score (0..1) from the first face's categories. Mirrors the live
+// detector's lookup so the calibrated vertical thresholds and live worldVertical use identical units.
+function blendshapeScore(
+  categories: Array<{ categoryName?: string; displayName?: string; score?: number }> | undefined,
+  name: string,
+): number {
+  return (
+    categories?.find(
+      (c) => (c.categoryName || c.displayName || '').toLowerCase() === name.toLowerCase(),
+    )?.score ?? 0
+  );
+}
+
+// Net vertical eye-in-head rotation from blendshapes: >0 looking down, <0 looking up. Uses the min
+// of the two eyes for each direction (conservative), exactly like the live gaze detector.
+function eyeInHeadVertical(result: FaceLandmarkerResult | null): number {
+  const categories = (result as any)?.faceBlendshapes?.[0]?.categories as
+    | Array<{ categoryName?: string; displayName?: string; score?: number }>
+    | undefined;
+  if (!categories?.length) return 0;
+  const down = Math.min(blendshapeScore(categories, 'eyeLookDownLeft'), blendshapeScore(categories, 'eyeLookDownRight'));
+  const up = Math.min(blendshapeScore(categories, 'eyeLookUpLeft'), blendshapeScore(categories, 'eyeLookUpRight'));
+  return down - up;
+}
+
 function sampleIrisOffset(
   faceTask: FaceLandmarker,
   video: HTMLVideoElement,
@@ -98,31 +168,51 @@ function sampleIrisOffset(
   if (!leftOuter || !leftInner || !leftIris || !rightInner || !rightOuter || !rightIris)
     return null;
 
-  const leftW  = Math.max(Math.abs(leftOuter.x  - leftInner.x),  0.0001);
-  const rightW = Math.max(Math.abs(rightOuter.x - rightInner.x), 0.0001);
-
-  // upper/lower lids for vertical normalisation
+  // Upper/lower lids for vertical normalisation. Without them we cannot measure
+  // vertical gaze (or eye openness) reliably, so the frame is invalid.
   const lUp   = getFacePoint(lm, 159);
   const lDown = getFacePoint(lm, 145);
   const rUp   = getFacePoint(lm, 386);
   const rDown = getFacePoint(lm, 374);
-  const leftH  = Math.max(Math.abs((lUp?.y ?? leftIris.y) - (lDown?.y ?? leftIris.y)), 0.0001);
-  const rightH = Math.max(Math.abs((rUp?.y ?? rightIris.y) - (rDown?.y ?? rightIris.y)), 0.0001);
+  if (!lUp || !lDown || !rUp || !rDown) return null;
+
+  const rawLeftH  = Math.abs(lUp.y - lDown.y);
+  const rawRightH = Math.abs(rUp.y - rDown.y);
+  // A collapsed eye-open height means the eye is closed/blinking. Dividing the vertical
+  // offset by this near-zero height would explode the reading — which is exactly how
+  // closed eyes used to slip through as "valid" calibration data.
+  if (rawLeftH < MIN_EYE_OPEN_HEIGHT || rawRightH < MIN_EYE_OPEN_HEIGHT) return null;
+
+  const leftW  = Math.max(Math.abs(leftOuter.x  - leftInner.x),  0.0001);
+  const rightW = Math.max(Math.abs(rightOuter.x - rightInner.x), 0.0001);
+  const leftH  = Math.max(rawLeftH,  0.0001);
+  const rightH = Math.max(rawRightH, 0.0001);
 
   const leftMidX  = (leftOuter.x  + leftInner.x)  / 2;
   const rightMidX = (rightOuter.x + rightInner.x) / 2;
-  const leftMidY  = ((lUp?.y ?? leftIris.y) + (lDown?.y ?? leftIris.y)) / 2;
-  const rightMidY = ((rUp?.y ?? rightIris.y) + (rDown?.y ?? rightIris.y)) / 2;
+  const leftMidY  = (lUp.y + lDown.y) / 2;
+  const rightMidY = (rUp.y + rDown.y) / 2;
 
   const lOffX = (leftIris.x  - leftMidX)  / (leftW  / 2);
   const rOffX = (rightIris.x - rightMidX) / (rightW / 2);
   const lOffY = (leftIris.y  - leftMidY)  / (leftH  / 2);
   const rOffY = (rightIris.y - rightMidY) / (rightH / 2);
 
-  return {
-    offsetX: (lOffX + rOffX) / 2,
-    offsetY: (lOffY + rOffY) / 2,
-  };
+  const offsetX = (lOffX + rOffX) / 2;
+  const offsetY = (lOffY + rOffY) / 2;
+
+  // Physically implausible magnitudes indicate a blink/closed eye or a bad landmark
+  // frame — drop the sample so it neither inflates nor fabricates calibration data.
+  if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY)) return null;
+  if (Math.abs(offsetX) > MAX_PLAUSIBLE_IRIS_OFFSET || Math.abs(offsetY) > MAX_PLAUSIBLE_IRIS_OFFSET) return null;
+
+  // Deterministic head pitch (chin-down positive) so calibration and live share one vertical frame.
+  const noseTip = getFacePoint(lm, 1);
+  const forehead = getFacePoint(lm, 10);
+  const chin = getFacePoint(lm, 152);
+  const headPitch = noseEyePitchDeg(leftOuter, rightOuter, noseTip, forehead, chin) ?? 0;
+
+  return { offsetX, offsetY, eyeInHeadV: eyeInHeadVertical(result), headPitch };
 }
 
 function median(values: number[]): number {
@@ -132,6 +222,17 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0
     ? (sorted[mid - 1]! + sorted[mid]!) / 2
     : sorted[mid]!;
+}
+
+function mean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[], average: number): number {
+  if (values.length <= 1) return 0;
+  const variance = values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
 }
 
 function pointMedian(
@@ -215,16 +316,100 @@ function computeResult(allPointSamples: PointSamples[]): CalibrationResult {
   const thresholdX = Math.max(rawThreshX * 0.92, 0.05);
   const thresholdY = Math.max(rawThreshY * 0.92, 0.05);
 
-  // Quality: how separable is the center from the edges?
-  // A score near 1 means the person's eyes moved a lot between center and corners.
-  const avgEdgeX = edgeDeviationsX.reduce((a, b) => a + b, 0) / (edgeDeviationsX.length || 1);
-  const avgEdgeY = edgeDeviationsY.reduce((a, b) => a + b, 0) / (edgeDeviationsY.length || 1);
-  const qualityScore = Math.min(
-    ((avgEdgeX / Math.max(thresholdX, 0.001)) + (avgEdgeY / Math.max(thresholdY, 0.001))) / 4,
-    1,
-  );
+  // ── Trust decision (physically-meaningful signals; see gazeVerticalMath) ────
+  // Acceptance is decided from absolute signals that cannot be faked by a still/closed/wrong gaze:
+  //   1. coverage        — every dot has enough valid iris samples (no-face / closed-eyes drop frames);
+  //   2. horizontal range— the eyes swept horizontally (iris offsetX, reliable under head rotation);
+  //   3. vertical sweep  — the eyes swept vertically in the BLENDSHAPE frame (vBottomEdge − vTopEdge),
+  //                        replacing the eyelid-corrupted iris-offsetY range/std that both
+  //                        false-rejected honest down-lookers AND let horizontal-only movers through;
+  //   4. steadiness      — per-dot gaze steady on iris-X and on the blendshape-vertical signal.
+  // None assume which screen direction maps to +X or +v, so a mirrored/raw frame cannot flip it.
+  const dotMeanX: number[] = [];
+  const dotMeanY: number[] = [];
+  let minValidSamples = Number.POSITIVE_INFINITY;
+  let maxDotStdX = 0;
+  let maxDotStdV = 0;
+  for (const pd of allPointSamples) {
+    if (pd.pointId === 'mc') continue;
+    minValidSamples = Math.min(minValidSamples, pd.samples.length);
+    if (!pd.samples.length) continue;
+    const xs = pd.samples.map((s) => s.offsetX);
+    const ys = pd.samples.map((s) => s.offsetY);
+    const vs = pd.samples.map((s) => s.eyeInHeadV);
+    const mx = mean(xs);
+    dotMeanX.push(mx);
+    dotMeanY.push(mean(ys));
+    maxDotStdX = Math.max(maxDotStdX, standardDeviation(xs, mx));
+    maxDotStdV = Math.max(maxDotStdV, standardDeviation(vs, mean(vs)));
+  }
+  if (!Number.isFinite(minValidSamples)) minValidSamples = 0;
 
-  return { thresholdX, thresholdY, neutralX, neutralY, pointData: allPointSamples, qualityScore };
+  const rangeX = dotMeanX.length ? Math.max(...dotMeanX) - Math.min(...dotMeanX) : 0;
+  const rangeY = dotMeanY.length ? Math.max(...dotMeanY) - Math.min(...dotMeanY) : 0;
+
+  // ── On-screen vertical band edges (world-vertical gaze at the top/bottom dots) ──────────────
+  // The blendshape vertical signal (eyeLookDown − eyeLookUp) is a far more reliable measure of
+  // vertical eye travel than the eyelid-coupled iris offsetY. Their medians are this person's
+  // on-screen top/bottom boundary. NO sign is assumed (camera-at-top ⇒ both usually positive).
+  const topEyeInHead = allPointSamples
+    .filter((p) => p.pointId === 'tl' || p.pointId === 'tc' || p.pointId === 'tr')
+    .flatMap((p) => p.samples.map((s) => s.eyeInHeadV));
+  const bottomEyeInHead = allPointSamples
+    .filter((p) => p.pointId === 'bl' || p.pointId === 'bc' || p.pointId === 'br')
+    .flatMap((p) => p.samples.map((s) => s.eyeInHeadV));
+  const vTopEdge = topEyeInHead.length ? median(topEyeInHead) : 0;
+  const vBottomEdge = bottomEyeInHead.length ? median(bottomEyeInHead) : 0;
+  const vSweep = vBottomEdge - vTopEdge;
+
+  // Median deterministic head pitch (chin-down positive, degrees). Live seeds its vertical
+  // head-pitch baseline from this so the band and live readings share one frame.
+  const allHeadPitch = allPointSamples.flatMap((p) => p.samples.map((s) => s.headPitch));
+  const headPitchDeg = allHeadPitch.length ? median(allHeadPitch) : 0;
+
+  const { accepted, reason } = evaluateCalibrationAcceptance({
+    minValidSamples,
+    rangeX,
+    vTopEdge,
+    vBottomEdge,
+    maxDotStdX,
+    maxDotStdV,
+  });
+  const rejectionReason =
+    reason === 'coverage'
+      ? 'We could not see your eyes clearly at every dot. Keep your face centered in the camera with your eyes open, then recalibrate.'
+      : reason === 'horizontalRange'
+      ? 'Your eyes barely moved between the dots. Follow each dot with your eyes (keep your head still), then recalibrate.'
+      : reason === 'verticalSweep'
+      ? 'Your eyes did not move up and down enough. Look right at the top and bottom dots with your eyes (keep your head still), then recalibrate.'
+      : reason === 'steadiness'
+      ? 'Your gaze was unsteady during calibration. Hold on each dot until it turns green, then recalibrate.'
+      : null;
+
+  // Magnitude-aware quality so the on-screen bar agrees with the trust decision.
+  const coverageScore = Math.min(minValidSamples / SAMPLES_PER_POINT, 1);
+  const rangeScoreX = Math.min(rangeX / (MIN_OPPOSITE_EDGE_GAP_X * 2), 1);
+  const sweepScoreV = Math.min(vSweep / (MIN_V_BAND_WIDTH * 2), 1);
+  const qualityScore = accepted
+    ? Math.min(coverageScore, (rangeScoreX + sweepScoreV) / 2)
+    : 0;
+
+  return {
+    thresholdX,
+    thresholdY,
+    neutralX,
+    neutralY,
+    pointData: allPointSamples,
+    qualityScore,
+    accepted,
+    rejectionReason,
+    rangeX,
+    rangeY,
+    vTopEdge,
+    vBottomEdge,
+    vSweep,
+    headPitchDeg,
+  };
 }
 
 export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | null>) {
@@ -260,7 +445,10 @@ export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | 
           minFaceDetectionConfidence: 0.55,
           minFacePresenceConfidence: 0.55,
           minTrackingConfidence: 0.55,
-          outputFaceBlendshapes: false,
+          // Blendshapes drive the personalised vertical (up/down) thresholds: we read
+          // eyeLookUp/Down at the top/bottom dots to learn where this candidate's eyes sit at
+          // their screen edges. Must be ON here so calibration and live detection use the same signal.
+          outputFaceBlendshapes: true,
         });
       } catch (err) {
         setCalState((s) => ({ ...s, phase: 'error', error: 'Failed to load face model' }));

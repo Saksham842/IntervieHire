@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Enum, Float, ForeignKey, Text, Boolean, Integer, JSON
+from sqlalchemy import Column, String, DateTime, Enum, Float, ForeignKey, Text, Boolean, Integer, JSON, Index
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -158,3 +158,38 @@ class ProctoringLog(Base):
     createdAt = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     session = relationship("InterviewSession", back_populates="proctoringLogs")
+
+
+class ConsentLog(Base):
+    """Immutable audit trail ("security log") of candidate consent decisions.
+
+    Mirrors the interview engine's Prisma ``ConsentLog`` model on the shared DB.
+    Rows are written by the engine from the candidate room's consent gate BEFORE
+    any capture starts (biometric / recording+AI / 18+ / privacy-policy / cookies
+    consent). The backend only reads these for recruiter/audit surfacing.
+
+    Deliberately has NO ForeignKey to ``InterviewSession``: a consent/security log
+    must outlive deletion of the interview data, so ``sessionId`` is a plain
+    indexed string rather than a cascading relation.
+    """
+    __tablename__ = 'ConsentLog'
+
+    id = Column(String, primary_key=True)
+    sessionId = Column(String, nullable=False)
+    action = Column(String, nullable=False)  # 'granted' | 'declined'
+    consentVersion = Column(String, nullable=False)
+    # { age18Plus, dataProcessing, biometric, privacyPolicy, cookies }
+    scopes = Column(JSONB, default=dict, nullable=False)
+    candidateEmail = Column(String, nullable=True)
+    candidateName = Column(String, nullable=True)
+    inviteToken = Column(String, nullable=True)
+    userAgent = Column(String, nullable=True)
+    ipAddress = Column(String, nullable=True)
+    locale = Column(String, nullable=True)
+    createdAt = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Index name matches the Prisma migration so create_all() and
+    # `prisma migrate deploy` never fight over it, whichever runs first.
+    __table_args__ = (
+        Index('ConsentLog_sessionId_createdAt_idx', 'sessionId', 'createdAt'),
+    )
