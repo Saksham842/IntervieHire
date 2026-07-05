@@ -603,16 +603,9 @@ export const html = `
             <div class="config-grid">
               <div class="card-glass panel-setting">
                 <h3 class="panel-title">Career Page Settings</h3>
-                <p class="panel-desc">Configure your public career subdomain page and listing styling rules.</p>
-                
+                <p class="panel-desc">Edit your public career page hero headline. Your subdomain is assigned automatically — see the live status alongside.</p>
+
                 <form class="settings-form" id="career-settings-form">
-                  <div class="form-group">
-                    <label for="career-subdomain">Company Subdomain</label>
-                    <div class="input-prefix-wrap">
-                      <span class="prefix">interviehire.com/careers/</span>
-                      <input type="text" id="career-subdomain" value="" required disabled />
-                    </div>
-                  </div>
                   <div class="form-group">
                     <label for="career-intro">Hero Headline Introduction</label>
                     <input type="text" id="career-intro" value="Build the future of technology with us." disabled />

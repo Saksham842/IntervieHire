@@ -22,6 +22,7 @@ from app.utils.auth import (
     get_current_user,
     get_active_org_id,
 )
+from app.utils.career import unique_career_subdomain
 
 router = APIRouter()
 
@@ -222,6 +223,9 @@ def onboarding(data: OnboardingIn, current_user: User = Depends(get_current_user
         location=data.location,
         description=data.description,
     )
+    # System-assign a unique public career-page subdomain so the org's careers page
+    # is addressable the moment it's created (recruiters never type this).
+    org.career_subdomain = unique_career_subdomain(db, data.org_name)
     db.add(org)
     db.commit()
     db.refresh(org)

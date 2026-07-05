@@ -92,6 +92,29 @@ def init_db():
         except Exception as migration_err:
             print(f"Migration error (career_pages -> organisations): {migration_err}")
 
+    # Backfill: every organisation needs a public career subdomain so its careers
+    # page is addressable. Older orgs (created before subdomains were auto-assigned)
+    # have NULL — give each a unique slug. Idempotent: orgs that already have one
+    # are skipped.
+    try:
+        from app.database import SessionLocal
+        from app.models.organisation import Organisation
+        from app.utils.career import unique_career_subdomain
+
+        db = SessionLocal()
+        try:
+            missing = db.query(Organisation).filter(Organisation.career_subdomain.is_(None)).all()
+            for org in missing:
+                org.career_subdomain = unique_career_subdomain(db, org.org_name, org.id)
+                db.flush()  # make this slug visible to the next iteration's uniqueness check
+            if missing:
+                db.commit()
+                print(f"Backfilled career_subdomain for {len(missing)} organisation(s).")
+        finally:
+            db.close()
+    except Exception as backfill_err:
+        print(f"Backfill error (career_subdomain): {backfill_err}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

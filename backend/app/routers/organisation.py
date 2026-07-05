@@ -9,6 +9,7 @@ from app.models.organisation import Organisation
 from app.models.user import User, UserType
 from app.schemas import OrganisationOut, OrganisationIn
 from app.utils.auth import get_current_user, get_active_org_id
+from app.utils.career import unique_career_subdomain
 
 router = APIRouter()
 
@@ -43,10 +44,13 @@ def upsert_organisation(
     if not org_id:
         # Create a new Organisation if they don't have one (alternative onboarding flow)
         org = Organisation(**data.model_dump())
+        # Career subdomain is system-managed; auto-assign one if none was provided.
+        if not org.career_subdomain:
+            org.career_subdomain = unique_career_subdomain(db, org.org_name)
         db.add(org)
         db.commit()
         db.refresh(org)
-        
+
         current_user.organisation_id = org.id
         db.commit()
         return org
@@ -58,6 +62,10 @@ def upsert_organisation(
     else:
         org = Organisation(id=org_id, **data.model_dump())
         db.add(org)
+    # Ensure every org ends up with a career subdomain even if it never had one
+    # (older orgs, or the create-with-known-id branch above).
+    if not org.career_subdomain:
+        org.career_subdomain = unique_career_subdomain(db, org.org_name, org.id)
     db.commit()
     db.refresh(org)
     return org

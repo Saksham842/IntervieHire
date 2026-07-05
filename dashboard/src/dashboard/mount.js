@@ -253,14 +253,21 @@ function initMountBindings() {
         navigateToSourcing(jobId);
         break;
       case 'career-page': {
-        job.listedOnCareer = !job.listedOnCareer;
-        renderJobCards();
-        const label = job.listedOnCareer ? 'listed on' : 'removed from';
-        showPremiumToast(`"${job.cardName || job.roleName}" ${label} career page.`, 'success');
+        const nextListed = !job.listedOnCareer;
+        // Persist FIRST, then claim success — the public career query requires BOTH
+        // is_job_listed AND status='published' (backend public.py), so listing a job
+        // also publishes it. Only toast after the backend confirms so we never report
+        // a silently-skipped no-op.
         if (getDataSource() === 'api' && job._backend) {
-          try { await apiSetJobListed(job.id, job.listedOnCareer); }
-          catch (e) { job.listedOnCareer = !job.listedOnCareer; renderJobCards(); showPremiumToast('Could not update career page', 'error'); }
+          try {
+            await apiPatchJobSettings(job.id, nextListed ? { is_job_listed: true, status: 'published' } : { is_job_listed: false });
+          } catch (e) { showPremiumToast('Could not update career page', 'error'); break; }
         }
+        job.listedOnCareer = nextListed;
+        if (nextListed) job.status = 'published';
+        renderJobCards();
+        const label = nextListed ? 'listed on' : 'removed from';
+        showPremiumToast(`"${job.cardName || job.roleName}" ${label} career page.`, 'success');
         break;
       }
       case 'duplicate': {
@@ -835,9 +842,9 @@ function initMountBindings() {
     soundEngine.playChime([261.63, 392.00, 523.25], 0.2, 0.08); // Confirmation chime
   });
 
-  // 3. Settings Forms — Career Page config. Persists to the org profile in API
-  //    mode (career_subdomain / career_intro), with localStorage as the local-mode
-  //    fallback so the field survives a refresh either way.
+  // 3. Settings Forms — Career Page config. The recruiter edits only the hero
+  //    intro (persisted to the org profile in API mode); the subdomain is
+  //    system-assigned and shown read-only in the live status panel.
   const applyCareerDomain = (sub) => {
     const root = document.getElementById('view-career');
     const statusLink = root && root.querySelector('.status-link');
@@ -868,22 +875,20 @@ function initMountBindings() {
   // HYDRATE on mount: local restore first (instant), then the authoritative org
   // record overrides it in API mode. Guard against not being on the Career view.
   (async () => {
-    const field = document.getElementById('career-subdomain');
-    if (!field) return; // not on the Career Page view — nothing to wire
     const introField = document.getElementById('career-intro');
+    if (!introField) return; // not on the Career Page view — nothing to wire
     try {
-      const saved = localStorage.getItem('IntervieHire_career_subdomain');
-      if (saved) { field.value = saved; applyCareerDomain(saved); }
+      const savedSub = localStorage.getItem('IntervieHire_career_subdomain');
+      if (savedSub) applyCareerDomain(savedSub);
     } catch { /* ignore corrupt/blocked storage */ }
     if (getDataSource() === 'api') {
       try {
         const org = await apiGetOrganisation();
         if (org) {
-          // Authoritative: reflect the active org's real value, INCLUDING empty, so
-          // the stale "devasri-tech" default never lingers for an unpublished org.
-          field.value = org.career_subdomain || '';
+          // The subdomain is system-assigned and read-only — just reflect it in the
+          // live status panel. The recruiter can only edit the hero intro.
           applyCareerDomain(org.career_subdomain || '');
-          if (introField && org.career_intro != null) introField.value = org.career_intro;
+          if (org.career_intro != null) introField.value = org.career_intro;
         }
       } catch { /* keep the local fallback already applied */ }
     }
@@ -894,38 +899,33 @@ function initMountBindings() {
   const careerToggle = document.getElementById('career-edit-toggle');
   if (careerToggle) {
     careerToggle.addEventListener('click', async () => {
-      const field = document.getElementById('career-subdomain');
       const introField = document.getElementById('career-intro');
-      if (!field) return;
+      if (!introField) return;
 
-      // → ENTER EDIT MODE: unlock inputs, focus the subdomain, flip the label.
+      // → ENTER EDIT MODE: unlock the hero intro (the only editable field now —
+      //   the subdomain is system-assigned).
       if (careerToggle.dataset.editing !== '1') {
-        field.disabled = false;
-        if (introField) introField.disabled = false;
+        introField.disabled = false;
         careerToggle.dataset.editing = '1';
         careerToggle.textContent = 'Save Configurations';
-        field.focus();
+        introField.focus();
         soundEngine.playClick();
         return;
       }
 
-      // → SAVE: read values, persist, then relock + 2s green-flash confirmation.
-      const subdomain = field.value.trim();
-      const intro = introField ? introField.value : '';
+      // → SAVE: persist the hero intro, then relock + 2s green-flash confirmation.
+      const intro = introField.value;
       if (getDataSource() === 'api') {
         try {
-          await apiUpdateOrganisation({ career_subdomain: subdomain, career_intro: intro });
+          await apiUpdateOrganisation({ career_intro: intro });
         } catch (e) {
           showPremiumToast(`Could not save career page: ${(e && e.message) || 'backend error'}`, 'error');
           return; // keep inputs editable so the recruiter can retry
         }
       }
-      try { localStorage.setItem('IntervieHire_career_subdomain', subdomain); } catch {}
       soundEngine.playChime([523.25], 0.15);
-      field.disabled = true;
-      if (introField) introField.disabled = true;
+      introField.disabled = true;
       careerToggle.dataset.editing = '';
-      applyCareerDomain(subdomain);
       careerToggle.textContent = '✓ Saved';
       careerToggle.style.background = 'var(--color-success)';
       careerToggle.style.color = '#fff';
