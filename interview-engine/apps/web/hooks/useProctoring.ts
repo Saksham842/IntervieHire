@@ -168,6 +168,15 @@ const MAX_VIOLATION_SCREEN_CLIP_MS = 30000;
 const VIOLATION_SCREEN_RECORDING_TIMESLICE_MS = 1000;
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Violation screen recorder — captures a short clip of the candidate's ENTIRE
+// screen around each integrity violation (tab switch, fullscreen exit, phone,
+// clipboard shortcut, etc.). One long-lived getDisplayMedia share is reused for
+// every clip so the candidate is prompted only once; audio siphoned off the same
+// share feeds the transcript hook (no second prompt).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Unique clip id, preferring crypto.randomUUID with a timestamp+random fallback. */
 function makeViolationRecordingId(prefix = 'violation-recording') {
   const cryptoObj = globalThis.crypto;
   if (cryptoObj && 'randomUUID' in cryptoObj) {
@@ -177,6 +186,7 @@ function makeViolationRecordingId(prefix = 'violation-recording') {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+/** Pick the best-supported MediaRecorder container/codec (VP9→VP8→webm→mp4), or '' if none. */
 function getBestViolationRecordingMimeType() {
   if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) {
     return '';
@@ -192,20 +202,29 @@ function getBestViolationRecordingMimeType() {
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
 }
 
+/** True when the screen-share stream still has at least one live video track. */
 function isScreenShareStreamActive(stream: MediaStream | null) {
   return Boolean(stream && stream.getVideoTracks().some((track) => track.readyState === 'live'));
 }
 
+/** Feature-detect getDisplayMedia + MediaRecorder. Defaults true during SSR (no navigator). */
 function isScreenShareRecordingSupported() {
   if (typeof navigator === 'undefined') return true;
   return typeof navigator.mediaDevices?.getDisplayMedia === 'function' && typeof MediaRecorder !== 'undefined';
 }
 
+/** Feature-detect getUserMedia for the microphone. Defaults true during SSR. */
 function isMicrophoneCaptureSupported() {
   if (typeof navigator === 'undefined') return true;
   return typeof navigator.mediaDevices?.getUserMedia === 'function';
 }
 
+/**
+ * Hook owning the whole-screen violation recorder. Holds the persistent share
+ * stream + a single MediaRecorder, and exposes start/stop/one-shot-clip helpers.
+ * Clips have enforced min/max durations (short violations still yield a usable
+ * clip; runaway recordings auto-stop) and are handed back via onClipReady.
+ */
 function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions = {}) {
   const {
     defaultClipMs = DEFAULT_VIOLATION_SCREEN_CLIP_MS,
@@ -248,6 +267,7 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     [onError],
   );
 
+  /** Tear down both the video and the siphoned-audio share tracks and drop the permission flag. */
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
@@ -256,6 +276,12 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     setHasScreenSharePermission(false);
   }, []);
 
+  /**
+   * Prompt for (or reuse) a whole-screen share. ENFORCES Entire-Screen selection
+   * (rejects tab/window — fail-closed) and splits the granted stream into a
+   * video-only proctoring stream plus a separate audio stream for transcription.
+   * Returns true on success; surfaces failures through emitRecorderError.
+   */
   const requestScreenShare = useCallback(async () => {
     try {
       setScreenShareError(null);
@@ -336,6 +362,11 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     }
   }, [emitRecorderError, onScreenShareStopped, stopScreenShare]);
 
+  /**
+   * MediaRecorder.onstop handler: assemble the buffered chunks into a Blob + object
+   * URL, stamp the clip metadata (duration, violation types, event list), reset the
+   * recorder state, and hand the finished clip to onClipReady.
+   */
   const finalizeRecording = useCallback(() => {
     const meta = activeMetaRef.current;
     const recorder = recorderRef.current;
@@ -368,6 +399,11 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     void onClipReady?.(clip);
   }, [onClipReady]);
 
+  /**
+   * Stop the active recording, but never before minClipMs has elapsed: if the
+   * violation ends too soon the stop is deferred so every clip is long enough to
+   * be reviewable. Also clears the auto-stop safety timer.
+   */
   const stopViolationRecording = useCallback(() => {
     const recorder = recorderRef.current;
     const meta = activeMetaRef.current;
@@ -392,6 +428,12 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     stopNow();
   }, [clearTimer, minClipMs]);
 
+  /**
+   * Begin (or extend) a violation recording. If a recording is already running,
+   * the new violation type/event is merged into the active clip instead of
+   * starting a second recorder — overlapping violations share one clip. Arms a
+   * maxClipMs auto-stop so a recording can never run away. Requires an active share.
+   */
   const startViolationRecording = useCallback(
     (type: ProctoringViolationType, details?: Record<string, unknown>) => {
       try {
@@ -463,6 +505,11 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     [clearTimer, emitRecorderError, finalizeRecording, maxClipMs, stopViolationRecording, timesliceMs],
   );
 
+  /**
+   * One-shot convenience: start a recording and schedule its stop after clipMs
+   * (clamped to [minClipMs, maxClipMs]). Used for point-in-time violations that
+   * have no natural "returned" event to close the clip (phone, no-face, clipboard).
+   */
   const recordViolationClip = useCallback(
     (type: ProctoringViolationType, details?: Record<string, unknown>, clipMs = defaultClipMs) => {
       const started = startViolationRecording(type, details);
@@ -786,6 +833,7 @@ function createInitialProctoringData(): ProctoringData {
 // Phone-detection helpers (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Lowercased label for an EfficientDet category, tolerating the various field names it uses. */
 function getPhoneCategoryName(category: any): string {
   return (
     (category.categoryName || category.displayName || category.label || '')
@@ -794,6 +842,7 @@ function getPhoneCategoryName(category: any): string {
   );
 }
 
+/** Map a box's frame-area fraction to a coarse distance bucket (bigger box ⇒ closer). */
 function getProximity(areaRatio: number): PhoneProximity {
   if (areaRatio >= AREA_ONSCREEN) return 'onscreen';
   if (areaRatio >= AREA_CLOSE)    return 'close';
@@ -801,6 +850,7 @@ function getProximity(areaRatio: number): PhoneProximity {
   return 'far';
 }
 
+/** Classify a box's width/height aspect ratio as a phone-shaped portrait/landscape/diagonal. */
 function getPhoneOrientation(ar: number): PhoneOrientation {
   if (ar >= PORTRAIT_AR.min  && ar <= PORTRAIT_AR.max)  return 'portrait';
   if (ar >= LANDSCAPE_AR.min && ar <= LANDSCAPE_AR.max) return 'landscape';
@@ -808,6 +858,7 @@ function getPhoneOrientation(ar: number): PhoneOrientation {
   return 'unknown';
 }
 
+/** Linearly recency-weighted mean of a score buffer (newest sample weighted highest). */
 function rollingScore(buffer: number[]): number {
   if (!buffer.length) return 0;
   let wSum = 0, wTotal = 0;
@@ -823,12 +874,14 @@ function createPhoneState(): PhoneState {
   return { scoreBuffer: [], confirmedSince: null };
 }
 
+/** Sustained-confirmation window before a phone alert fires: shorter when the signal is strong/close. */
 function getPhoneConfirmMs(confidence: number, proximity: PhoneProximity): number {
   if (confidence >= 0.55 || proximity === 'close' || proximity === 'onscreen') return CONFIRM_MS_HIGH;
   if (confidence >= 0.35 || proximity === 'mid') return CONFIRM_MS_MED;
   return CONFIRM_MS_LOW;
 }
 
+/** True when the box hugs any frame edge (within `margin`), a strong cue for a hand-held phone. */
 function isEdgeTouching(
   box: { originX: number; originY: number; width: number; height: number },
   videoWidth: number,
@@ -842,6 +895,18 @@ function isEdgeTouching(
   return x1 <= margin || y1 <= margin || x2 >= (1 - margin) || y2 >= (1 - margin);
 }
 
+/**
+ * Per-frame phone analysis fusing four independent strategies, because EfficientDet
+ * rarely labels a phone reliably on a webcam feed:
+ *   1. ML label      — a categories match against PHONE_KEYWORDS, edge-boosted.
+ *   2. aspect heuristic — a phone-shaped box (portrait/landscape/diagonal) not on the
+ *                         blocklist, scored by size and phone-adjacency.
+ *   3. combined bonus — two+ strategies agreeing adds COMBINED_BONUS confidence.
+ *   4. edge-touch standalone — a large phone-shaped box clipping an edge, even unlabeled.
+ * The frame's raw confidence is pushed into a recency-weighted rolling buffer so a
+ * single noisy frame cannot trip (or clear) detection. Also reports the closest
+ * proximity/orientation seen and the per-strategy confirm window.
+ */
 function analyzePhoneDetection(
   result: ObjectDetectorResult,
   videoWidth: number,
@@ -989,6 +1054,10 @@ function analyzePhoneDetection(
   };
 }
 
+/**
+ * Edge-triggered gate: returns true once the phone has stayed detected for its full
+ * confirmMs window, then resets so the next alert requires a fresh sustained streak.
+ */
 function consumePhoneAlert(phone: PhoneAnalysis, state: PhoneState): boolean {
   if (!phone.detected) { state.confirmedSince = null; return false; }
   if (state.confirmedSince === null) state.confirmedSince = Date.now();
@@ -1187,6 +1256,16 @@ function consumeForeignObjectAlert(
   return false;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Head-pose estimation
+// Head yaw/pitch/roll are tracked as DELTAS from a per-session baseline (the first
+// clean face frame or the calibration pose). A large sustained deviation fires
+// HEAD_MOVEMENT; a small yaw/pitch also feeds the gaze-compensation math so a tilt
+// isn't misread as looking away. Preferred source is MediaPipe's transformation
+// matrix, falling back to a landmark-geometry proxy.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Safe indexed access into a single face's landmark array (undefined-tolerant). */
 function getFacePoint(landmarks: FaceLandmarkerResult['faceLandmarks'][number] | undefined, index: number) {
   return landmarks?.[index];
 }
@@ -1212,6 +1291,7 @@ function radiansToDegrees(value: number) {
   return (value * 180) / Math.PI;
 }
 
+/** Signed current−baseline angle difference wrapped into (−180°, 180°]. */
 function normalizeAngleDelta(current: number, baseline: number) {
   let delta = current - baseline;
   while (delta > 180) delta -= 360;
@@ -1219,6 +1299,10 @@ function normalizeAngleDelta(current: number, baseline: number) {
   return delta;
 }
 
+/**
+ * Preferred head pose: decompose MediaPipe's 4×4 facial transformation matrix into
+ * Euler yaw/pitch/roll (degrees). Returns null when the matrix is absent or singular.
+ */
 function getHeadPoseFromMatrix(result: FaceLandmarkerResult | null): HeadPose | null {
   const matrix = (result as any)?.facialTransformationMatrixes?.[0];
   const data = matrix?.data ?? matrix?.matrix ?? matrix;
@@ -1244,6 +1328,11 @@ function getHeadPoseFromMatrix(result: FaceLandmarkerResult | null): HeadPose | 
   return { yaw, pitch, roll, source: 'matrix' };
 }
 
+/**
+ * Fallback head pose from raw landmark geometry: nose offset from the eye-midpoint
+ * (normalised by face width/height) gives yaw/pitch, eye-line slope gives roll.
+ * Used when the transformation matrix is unavailable.
+ */
 function getHeadPoseFromLandmarks(result: FaceLandmarkerResult | null): HeadPose | null {
   const landmarks = result?.faceLandmarks?.[0];
   const leftEyeOuter = getFacePoint(landmarks, 33);
@@ -1269,10 +1358,16 @@ function getHeadPoseFromLandmarks(result: FaceLandmarkerResult | null): HeadPose
   return { yaw, pitch, roll, source: 'landmarks' };
 }
 
+/** Head pose from the matrix when available, else the landmark-geometry fallback. */
 function estimateHeadPose(result: FaceLandmarkerResult | null): HeadPose | null {
   return getHeadPoseFromMatrix(result) ?? getHeadPoseFromLandmarks(result);
 }
 
+/**
+ * Per-axis deltas from the calibration baseline plus the combined magnitude and the
+ * single worst axis. `tooMuch` trips when either the vector magnitude or any single
+ * axis crosses the ~23° threshold — the HEAD_MOVEMENT alarm condition.
+ */
 function calculateHeadPoseDeviation(current: HeadPose, baseline: HeadPose): HeadPoseDeviation {
   const yaw = normalizeAngleDelta(current.yaw, baseline.yaw);
   const pitch = normalizeAngleDelta(current.pitch, baseline.pitch);
@@ -1290,6 +1385,8 @@ function calculateHeadPoseDeviation(current: HeadPose, baseline: HeadPose): Head
   };
 }
 
+/** Deadzoned, capped head-pitch/yaw delta used to compensate gaze: ignore jitter below
+ *  START, saturate at MAX (beyond which the head-movement alarm owns it). */
 function clampHeadPoseForGazeCompensation(deltaDegrees: number) {
   if (!Number.isFinite(deltaDegrees)) return 0;
   const absDelta = Math.abs(deltaDegrees);
@@ -1299,6 +1396,8 @@ function clampHeadPoseForGazeCompensation(deltaDegrees: number) {
   return Math.sign(deltaDegrees) * (clampedAbsDelta - HEAD_POSE_GAZE_COMPENSATION_START_DEG);
 }
 
+/** Sign-preserving shrink of `value` toward 0 by the head-pose contribution — the
+ *  conservative fallback when signed compensation would be device-convention-wrong. */
 function reduceMagnitudeByHeadPose(value: number, deltaDegrees: number, factor: number) {
   const reduction = Math.abs(clampHeadPoseForGazeCompensation(deltaDegrees)) * factor;
   if (reduction <= 0) return value;
@@ -1306,6 +1405,12 @@ function reduceMagnitudeByHeadPose(value: number, deltaDegrees: number, factor: 
   return Math.sign(value) * remainingMagnitude;
 }
 
+/**
+ * Remove the face-relative gaze shift a head tilt induces (horizontal axis). Tries
+ * signed compensation; if the device's coordinate convention makes that worsen the
+ * reading, falls back to a magnitude-only reduction so compensation can never
+ * manufacture a false gaze-away.
+ */
 function compensateGazeWithHeadPose(value: number, deltaDegrees: number, factor: number) {
   const clampedDelta = clampHeadPoseForGazeCompensation(deltaDegrees);
   if (clampedDelta === 0) return value;
@@ -1332,6 +1437,22 @@ function gazePitchDegLive(result: FaceLandmarkerResult | null): number | null {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Gaze detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-frame gaze verdict on two independent axes:
+ *   • HORIZONTAL — iris-in-socket offsetX vs the calibrated thresholdX. Eye corners
+ *     are rigid under head rotation, so this is the reliable axis; optionally
+ *     exponentially smoothed and head-yaw-compensated.
+ *   • VERTICAL   — the world-vertical BAND model (classifyVertical): one signal,
+ *     head-pitch-folded (eyeLookDown − eyeLookUp), compared against the per-person
+ *     [vBandTop, vBandBottom] band. See gazeVerticalMath.ts.
+ * The two are merged by combineGazeDirection (OR to fire, stronger axis names it).
+ * When iris landmarks are missing it degrades to a raw blendshape liveness fallback.
+ * thresholdY/neutralY are legacy debug plumbing and do not affect the verdict.
+ */
 function detectGazeAway(
   result: FaceLandmarkerResult | null,
   thresholdX = DEFAULT_GAZE_THRESHOLD_X,
@@ -1502,10 +1623,20 @@ function detectGazeAway(
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Camera / fullscreen helpers (vendor-prefixed, SSR-safe)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** First video track of a stream, or null. */
 function getVideoTrack(stream: MediaStream | null | undefined): MediaStreamTrack | null {
   return stream?.getVideoTracks?.()[0] ?? null;
 }
 
+/**
+ * Return a human-readable reason the camera feed is unhealthy (track ended/muted/
+ * disabled, element detached, no frames yet, zero dimensions), or null when the feed
+ * is fully live. Drives CAMERA_OFF detection — a candidate covering/killing the camera.
+ */
 function getCameraHealthIssue(video: HTMLVideoElement | null, stream: MediaStream | null | undefined) {
   const track = getVideoTrack(stream);
 
@@ -1524,6 +1655,7 @@ function getCameraHealthIssue(video: HTMLVideoElement | null, stream: MediaStrea
   return null;
 }
 
+/** Current fullscreen element across standard + webkit/ms prefixes, or null. */
 function getFullscreenElement() {
   if (typeof document === 'undefined') return null;
   const doc = document as Document & {
@@ -1534,6 +1666,7 @@ function getFullscreenElement() {
   return document.fullscreenElement ?? doc.webkitFullscreenElement ?? doc.msFullscreenElement ?? null;
 }
 
+/** True when the browser both allows fullscreen and exposes a requestFullscreen method. */
 function isFullscreenSupported() {
   if (typeof document === 'undefined') return false;
   const doc = document as Document & {
@@ -1551,6 +1684,7 @@ function isFullscreenSupported() {
   return Boolean(fullscreenEnabled && requestFullscreen);
 }
 
+/** The documentElement's requestFullscreen method across vendor prefixes, or null. */
 function getRequestFullscreen() {
   if (typeof document === 'undefined') return null;
   const element = document.documentElement as HTMLElement & {
@@ -1560,6 +1694,15 @@ function getRequestFullscreen() {
 
   return element.requestFullscreen ?? element.webkitRequestFullscreen ?? element.msRequestFullscreen ?? null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main useProctoring hook
+// Owns the camera + MediaPipe models, the per-frame detection loop, all the
+// browser-integrity event listeners (tab switch, fullscreen, clipboard, screen
+// share, camera health), the violation screen recorder, and the running
+// proctoring-score counters. Streams events to the interview WebSocket via emit()
+// and returns live state plus the pre-interview permission/fullscreen flow.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function useProctoring(sessionId: string, socket?: WebSocket | null, calibration?: CalibrationResult | null, proctoringEnabled: boolean = true) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1674,6 +1817,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     headPoseSince.current = null;
   }, [calibration]);
 
+  /** Send one proctoring event to the interview WebSocket and prepend it to the local
+   *  ring buffer (last 10). No-ops until the session has actually started. */
   const emit = useCallback((eventType: string, severity: Severity, metadata: Record<string, unknown> = {}) => {
     if (!sessionStartedRef.current) return;
 
@@ -1683,6 +1828,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     setEvents((current) => [{ eventType, severity, timestamp: now, metadata }, ...current].slice(0, 10));
   }, [sessionId, socket]);
 
+  /** emit() guarded by a per-event-type cooldown ref (ALERT_COOLDOWN_MS) so a sustained
+   *  violation doesn't spam identical alerts. Returns whether it actually fired. */
   function emitWithCooldown(ref: { current: number }, eventType: string, severity: Severity, metadata: Record<string, unknown> = {}) {
     const now = Date.now();
     if (now - ref.current < ALERT_COOLDOWN_MS) return false;
@@ -1691,6 +1838,7 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     return true;
   }
 
+  /** Tab-switch alert with its own short cooldown (transitions are already debounced upstream). */
   function emitTabSwitchWithCooldown(metadata: Record<string, unknown> = {}) {
     const now = Date.now();
     if (now - tabSwitchAlertAt.current < TAB_SWITCH_ALERT_COOLDOWN_MS) return false;
@@ -1699,6 +1847,7 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     return true;
   }
 
+  /** Fullscreen-family alerts sharing one cooldown ref so exit/restore churn stays quiet. */
   function emitFullscreenWithCooldown(eventType: string, severity: Severity, metadata: Record<string, unknown> = {}) {
     const now = Date.now();
     if (now - fullscreenAlertAt.current < FULLSCREEN_ALERT_COOLDOWN_MS) return false;
@@ -1708,6 +1857,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
   }
 
 
+  /** Recorder onClipReady: store the finished clip (last 20) and emit a metadata event.
+   *  If the session already ended, revoke the object URL and drop it. */
   const handleViolationRecordingReady = useCallback(
     (clip: ViolationRecordingClip) => {
       if (!sessionStartedRef.current) {
@@ -1730,6 +1881,7 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     [emit],
   );
 
+  /** Recorder onError: emit a throttled error event (screen share likely missing). */
   const handleViolationRecordingError = useCallback(
     (error: Error) => {
       const now = Date.now();
@@ -1744,6 +1896,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     [emit],
   );
 
+  /** Fired when the candidate ends the screen share mid-interview: count it as a
+   *  session-control violation, mark it not-restored, and emit SCREEN_SHARE_STOPPED. */
   const handleScreenShareStopped = useCallback(() => {
     const now = Date.now();
     if (sessionStartedRef.current) {
@@ -1778,6 +1932,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     onScreenShareStopped: handleScreenShareStopped,
   });
 
+  // Mirror the recorder's screen-share permission into the hook's state flags and the
+  // synchronous ref the gesture handlers read.
   useEffect(() => {
     const now = Date.now();
     screenShareGrantedRef.current = violationScreenRecorder.hasScreenSharePermission;
@@ -1792,6 +1948,13 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     }));
   }, [violationScreenRecorder.hasScreenSharePermission]);
 
+  /**
+   * Collapse the raw session counters into the final 0–100 ProctoringScore. Each axis
+   * is scored independently (higher = cleaner), hard-capped for severe patterns (long
+   * phone streak, ≥10s camera-off, screen share never restored), then blended with fixed
+   * weights (tab/phone/session-control weigh most). Also builds the human-readable flags
+   * and the risk band. Pure over the counters — safe to call for a live preview.
+   */
   function computeProctoringScore(): ProctoringScore {
     const pd = proctoringDataRef.current;
 
@@ -1890,6 +2053,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     };
   }
 
+  /** Zero every counter, incident flag, confirmation timer, and detection state field so a
+   *  fresh session starts clean. Called at session start. */
   function resetSessionTracking() {
     proctoringDataRef.current = createInitialProctoringData();
     prevFaceCountRef.current = 1;
@@ -1936,6 +2101,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     }));
   }
 
+  /** Begin scoring: reset counters, flip the started flag (which un-gates emit()), and
+   *  announce PROCTORING_SESSION_STARTED. No-op if already running or already ended. */
   function startProctoringSession() {
     if (sessionStartedRef.current || proctoringSessionEnded) return false;
 
@@ -1946,6 +2113,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     return true;
   }
 
+  /** Tear down all live resources: stop the frame loop, recorder, screen share, camera
+   *  tracks, and MediaPipe models, and clear every incident timer/flag. Best-effort. */
   function stopLiveProctoringResources() {
     aliveRef.current = false;
 
@@ -1993,6 +2162,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     screenShareGrantedRef.current = false;
   }
 
+  /** Freeze the score, stop all live resources, emit PROCTORING_SCORE_FINALIZED, and
+   *  return the final score. This is the End-Interview entry point. */
   function endProctoringSession(): ProctoringScore {
     const score = computeProctoringScore();
     const endedAt = Date.now();
@@ -2039,6 +2210,9 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     return score;
   }
 
+  /** Put the exam into fullscreen (must be called from a user gesture). Handles the
+   *  unsupported/already-fullscreen/needs-request cases and keeps the state flags in sync;
+   *  emits FULLSCREEN_UNAVAILABLE / _REQUEST_FAILED on failure. */
   async function requestExamFullscreen(trigger = 'manual') {
     if (typeof window === 'undefined' || typeof document === 'undefined') return false;
 
@@ -2140,6 +2314,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     }
   }
 
+  /** Pre-interview gate: ensure a whole-screen share is granted (reusing an existing one),
+   *  syncing the readiness flags and emitting CONFIRMED/FAILED. Returns whether share is ready. */
   async function requestScreenShareBeforeInterview(trigger = 'pre_interview_start_button') {
     const supported = isScreenShareRecordingSupported();
     const now = Date.now();
@@ -2219,6 +2395,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     }
   }
 
+  /** Full pre-interview readiness step: require screen share FIRST, then enter fullscreen.
+   *  Returns true only when both are satisfied — the gate the Start button waits on. */
   async function enterFullscreenBeforeInterview(trigger = 'pre_interview_fullscreen_button') {
     const screenShareReady = await requestScreenShareBeforeInterview(trigger);
     if (!screenShareReady) return false;
@@ -2261,10 +2439,12 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     return entered && active;
   }
 
+  /** Alias used by the Start-Interview button; runs the share+fullscreen readiness flow. */
   async function prepareInterviewStart() {
     return enterFullscreenBeforeInterview('start_interview_button');
   }
 
+  /** Clear the tab-away duration interval plus the pending tab-switch and camera-off confirm timers. */
   function clearTabSwitchDurationTimer() {
     if (tabSwitchDurationTimerRef.current !== null && typeof window !== 'undefined') {
       window.clearInterval(tabSwitchDurationTimerRef.current);
@@ -2281,6 +2461,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     }
   }
 
+  /** While the candidate is away from the tab, tick the live away-duration into state once
+   *  per second for the UI. Single-instance guarded. */
   function startTabSwitchDurationTimer() {
     if (!sessionStartedRef.current || typeof window === 'undefined' || tabSwitchDurationTimerRef.current !== null) return;
 
@@ -2298,6 +2480,8 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     }, 1000);
   }
 
+  // Clipboard-shortcut watcher: capture-phase keydown catches Ctrl/Cmd+C / +V anywhere,
+  // emits COPY/PASTE alerts (paste is HIGH — pasted answers) and records a violation clip.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
@@ -2341,6 +2525,10 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     };
   }, [emit, violationScreenRecorder.recordViolationClip]);
 
+  // Tab/window-switch watcher. visibilitychange/blur/focus/pagehide/pageshow are folded
+  // into markTabAway/markTabReturned. An away requires a TAB_SWITCH_CONFIRM_MS confirmation
+  // window before it counts (transient blurs are ignored), the away duration is ticked live,
+  // and return closes the incident with a TAB_RETURNED event and stops the clip.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
@@ -2502,12 +2690,18 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     };
   }, [emit, violationScreenRecorder.startViolationRecording, violationScreenRecorder.stopViolationRecording]);
 
+  // Fullscreen watcher + first-gesture permission bootstrap. Tracks enter/exit across
+  // vendor-prefixed events, counts each exit as a session-control violation and records a
+  // clip, and — because browsers only grant fullscreen/getDisplayMedia from a real user
+  // gesture — runs the full share+fullscreen flow on the first pointerdown/keydown.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
     // Consent gate: do not attach fullscreen / screen-share gesture listeners
     // until the candidate has given informed consent. Re-runs when consent flips.
     if (!proctoringEnabled) return;
 
+    // Fullscreen (re)entered: close any open exit incident with FULLSCREEN_RESTORED (and stop
+    // its clip), else just note FULLSCREEN_ENTERED, and mark readiness.
     const markFullscreenEntered = (trigger: string) => {
       const now = Date.now();
       const durationMs = fullscreenExitSince.current ? now - fullscreenExitSince.current : 0;
@@ -2543,6 +2737,9 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
       }));
     };
 
+    // Fullscreen exited: ignored before the session or if fullscreen was never entered
+    // (initial state); otherwise opens an exit incident (counted once), emits a HIGH alert,
+    // and starts a violation clip.
     const markFullscreenExited = (trigger: string, reason = 'fullscreen_exited') => {
       const now = Date.now();
       if (!sessionStartedRef.current) {
@@ -2675,6 +2872,11 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     };
   }, [emit, proctoringEnabled, violationScreenRecorder.startViolationRecording, violationScreenRecorder.stopViolationRecording]);
 
+  // Main detection loop. Acquires the camera, loads the MediaPipe FaceLandmarker +
+  // ObjectDetector, then polls a tick() every LIVE_INTERVAL_MS that runs both models on the
+  // current frame and drives face-count / phone / foreign-object / gaze / head-pose detection
+  // plus camera-health tracking. Emits alerts (each behind a sustained-confirmation window +
+  // cooldown) and updates both the running score counters and the live UI state.
   useEffect(() => {
     // Consent gate: do not acquire the camera or load the face/object models
     // until the candidate has given informed consent. Re-runs when it flips true.
@@ -2805,6 +3007,9 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
         objectDetectorActive: true,
       }));
 
+      // One detection frame. Self-reschedules via setTimeout(tick, LIVE_INTERVAL_MS). Early
+      // branches handle camera-off and not-yet-ready feeds; the main body runs the models,
+      // updates counters, refreshes state, then applies each detector's confirm/cooldown gate.
       const tick = () => {
         if (!aliveRef.current) return;
         const currentVideo = videoRef.current;
@@ -3022,6 +3227,9 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
           gazePitchDelta,
         );
 
+        // Before the session starts we still run the models (to show a live camera preview
+        // and keep the loop warm) but must not accumulate counters or fire alerts, so reset
+        // all confirmation timers/state and report a neutral "ready" frame.
         if (!sessionStartedRef.current) {
           missingSince.current = null;
           multiFaceSince.current = null;
