@@ -603,16 +603,9 @@ export const html = `
             <div class="config-grid">
               <div class="card-glass panel-setting">
                 <h3 class="panel-title">Career Page Settings</h3>
-                <p class="panel-desc">Configure your public career subdomain page and listing styling rules.</p>
-                
+                <p class="panel-desc">Edit your public career page hero headline. Your subdomain is assigned automatically — see the live status alongside.</p>
+
                 <form class="settings-form" id="career-settings-form">
-                  <div class="form-group">
-                    <label for="career-subdomain">Company Subdomain</label>
-                    <div class="input-prefix-wrap">
-                      <span class="prefix">interviehire.com/careers/</span>
-                      <input type="text" id="career-subdomain" value="" required disabled />
-                    </div>
-                  </div>
                   <div class="form-group">
                     <label for="career-intro">Hero Headline Introduction</label>
                     <input type="text" id="career-intro" value="Build the future of technology with us." disabled />
@@ -632,16 +625,21 @@ export const html = `
                 </div>
                 <div class="meta-metric-box">
                   <div class="sub-metric">
-                    <span class="lbl">Subdomain Visits</span>
-                    <span class="val">142</span>
-                  </div>
-                  <div class="sub-metric">
-                    <span class="lbl">Apply Rate</span>
-                    <span class="val">12.4%</span>
+                    <span class="lbl">Jobs live on career page</span>
+                    <span class="val" id="career-live-count">0</span>
                   </div>
                 </div>
               </div>
             </div>
+
+            <!-- Jobs live on the public career page — the dashboard-side record +
+                 quick-manage list. Static shell filled by renderCareerJobs()
+                 (career-panel.js); mirrors the #jobs-list-container pattern. -->
+            <section class="card-glass career-jobs-panel">
+              <h3 class="panel-title">Jobs on your career page</h3>
+              <p class="panel-desc">These roles are live on your public career page right now. Remove one to take it down instantly.</p>
+              <div id="career-jobs-list"></div>
+            </section>
           </section>
 
           <!-- ===================================== -->

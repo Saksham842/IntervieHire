@@ -15,7 +15,15 @@ import bcrypt
 # JWT configuration
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 7
+# Shorter session window shrinks the blast radius of a leaked cookie/token. A
+# hiring dashboard re-login once a day is acceptable; bump this back up (or add
+# refresh-token rotation) if longer sessions are needed. Keep the auth-cookie
+# `max_age` in `routers/auth.py` in sync with this value.
+ACCESS_TOKEN_EXPIRE_DAYS = 1
+
+# Pin the bcrypt work factor explicitly rather than relying on the library
+# default, so the cost is auditable and can be raised deliberately over time.
+BCRYPT_ROUNDS = 12
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -26,7 +34,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def get_password_hash(password: str) -> str:
-    salt = bcrypt.gensalt()
+    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
     return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 

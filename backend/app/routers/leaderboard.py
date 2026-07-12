@@ -8,6 +8,7 @@ from app.models.applicant import Applicant
 from app.models.job import Job
 from app.models.ai_integration import InterviewSession, ProctoringLog
 from app.routers.auth import get_current_user, get_active_org_id
+from app.routers.jobs import _verify_job_access
 from app.models.user import User
 
 router = APIRouter()
@@ -19,11 +20,11 @@ def get_job_leaderboard(
     active_org_id: UUID = Depends(get_active_org_id),
     db: Session = Depends(get_db)
 ):
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.organisation_id and active_org_id and job.organisation_id != active_org_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this job's candidates")
+    # Deny-by-default org ownership check (reuses the same helper as jobs.py).
+    # This closes the IDOR where a null-org job bypassed the old inline guard and
+    # leaked another org's candidate PII/scores. Raises 404 if missing, 403 if the
+    # job isn't in the caller's active org.
+    _verify_job_access(job_id, current_user, active_org_id, db)
 
     applicants = db.query(Applicant).filter(Applicant.job_id == job_id).all()
     

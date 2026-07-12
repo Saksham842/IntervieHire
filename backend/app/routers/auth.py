@@ -22,6 +22,8 @@ from app.utils.auth import (
     get_current_user,
     get_active_org_id,
 )
+from app.utils.career import unique_career_subdomain
+from app.routers.invites import _rate_limit
 
 router = APIRouter()
 
@@ -61,7 +63,10 @@ class UserProfileOut(BaseModel):
 
 
 @router.post("/signup")
-def signup(data: SignupIn, response: Response, db: Session = Depends(get_db)):
+def signup(data: SignupIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    # Throttle account creation per source IP to blunt automated signup abuse.
+    _rate_limit(request, limit=10, window=300.0)
+
     # Check if user with this email already exists
     user = db.query(User).filter(User.email == data.email).first()
     
@@ -98,7 +103,7 @@ def signup(data: SignupIn, response: Response, db: Session = Depends(get_db)):
         key="token",
         value=access_token,
         httponly=True,
-        max_age=7 * 24 * 60 * 60,  # 7 days
+        max_age=1 * 24 * 60 * 60,  # 1 day — keep in sync with ACCESS_TOKEN_EXPIRE_DAYS
         samesite=COOKIE_SAMESITE,
         secure=COOKIE_SECURE,
         path="/",
@@ -121,6 +126,12 @@ def signup(data: SignupIn, response: Response, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def login(data: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    # Throttle online password guessing on two axes: per source IP (broad abuse)
+    # and per target account (credential stuffing that rotates IPs is still capped
+    # per email). Both are best-effort in-process windows.
+    _rate_limit(request, limit=20, window=60.0)
+    _rate_limit(request, limit=8, window=300.0, key=f"login:email:{data.email.lower()}")
+
     user = db.query(User).filter(User.email == data.email).first()
     if not user or not user.hashed_password:
         raise HTTPException(
@@ -146,7 +157,7 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         key="token",
         value=access_token,
         httponly=True,
-        max_age=7 * 24 * 60 * 60,  # 7 days
+        max_age=1 * 24 * 60 * 60,  # 1 day — keep in sync with ACCESS_TOKEN_EXPIRE_DAYS
         samesite=COOKIE_SAMESITE,
         secure=COOKIE_SECURE,
         path="/",
@@ -222,6 +233,9 @@ def onboarding(data: OnboardingIn, current_user: User = Depends(get_current_user
         location=data.location,
         description=data.description,
     )
+    # System-assign a unique public career-page subdomain so the org's careers page
+    # is addressable the moment it's created (recruiters never type this).
+    org.career_subdomain = unique_career_subdomain(db, data.org_name)
     db.add(org)
     db.commit()
     db.refresh(org)

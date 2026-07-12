@@ -28,6 +28,11 @@ const AppState = {
   customDateTo: '',
   resumeStageView: 'all',
 
+  // The org's system-assigned public career subdomain, mirrored from the backend
+  // org record (see applyCareerDomain in mount.js). The Career-view jobs panel
+  // builds its "View live" links from this.
+  careerSubdomain: '',
+
   // In API mode the demo seed below must never paint: these flip true once the
   // live backend has hydrated jobs / usage so renderers can gate on real data.
   jobsHydrated: false,

@@ -16,7 +16,8 @@ from app.models.user import User, UserType
 from app.schemas import (
     JobListOut, JobOut, JobDetailOut, JobSettingsIn,
     JobPipelineCounts, CollaboratorIn, AddApplicantIn, ApplicantOut, FunnelOut, FunnelStage,
-    JobCreateIn, ApplicantUpdateIn, BulkApplicantsIn, OutgoingMessage, JobParametersIn
+    JobCreateIn, ApplicantUpdateIn, BulkApplicantsIn, OutgoingMessage, JobParametersIn,
+    ScheduleInterviewIn
 )
 from app.websocket_manager import manager
 from app.utils.auth import get_current_user, get_active_org_id
@@ -50,8 +51,41 @@ def _verify_applicant_access(applicant_id: UUID, current_user: User, active_org_
 
 router = APIRouter()
 
+
+def _ensure_upload_dir(path: str) -> None:
+    """Create an upload dir with owner-only perms.
+
+    chmod is best-effort — a no-op on Windows, but on the Linux host it keeps
+    resume/JD files from being world-readable by other processes on the box.
+    """
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _safe_upload_path(base_dir: str, filename: str) -> Optional[str]:
+    """Resolve a caller-supplied filename inside base_dir, defending against
+    path traversal / zip-slip.
+
+    Strips any directory components, then verifies the realpath stays within
+    base_dir. Returns None for empty or otherwise unsafe names so the caller
+    can skip them instead of writing outside the upload root.
+    """
+    name = os.path.basename(filename or "").strip()
+    if not name or name in (".", ".."):
+        return None
+    target = os.path.join(base_dir, name)
+    base_real = os.path.realpath(base_dir)
+    target_real = os.path.realpath(target)
+    if target_real != base_real and not target_real.startswith(base_real + os.sep):
+        return None
+    return target
+
+
 UPLOAD_DIR = "uploads/jd"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+_ensure_upload_dir(UPLOAD_DIR)
 
 # Throwaway "Launch test interview" candidates are tagged with this sentinel in
 # `remarks` so they never surface in the recruiter funnel, roster, or analytics.
@@ -253,10 +287,12 @@ def upload_jd(
     """Step 1 of Create Job — upload a PDF or DOCX job description."""
     if not file.filename.endswith((".pdf", ".docx")):
         raise HTTPException(status_code=400, detail="Only .pdf and .docx files are supported")
-    file_path = f"{UPLOAD_DIR}/{file.filename}"
+    file_path = _safe_upload_path(UPLOAD_DIR, file.filename)
+    if not file_path:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    return {"file_path": file_path, "filename": file.filename}
+    return {"file_path": file_path, "filename": os.path.basename(file.filename)}
 
 
 @router.post("/extract-jd")
@@ -273,7 +309,9 @@ def extract_jd(
         raise HTTPException(status_code=400, detail="Only .pdf, .docx, and .txt files are supported")
     
     # Save file
-    file_path = f"{UPLOAD_DIR}/{file.filename}"
+    file_path = _safe_upload_path(UPLOAD_DIR, file.filename)
+    if not file_path:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     # Extract text from file using robust utility
@@ -1892,21 +1930,23 @@ def upload_resumes(
     job = _verify_job_access(job_id, current_user, active_org_id, db)
         
     resume_dir = "uploads/resumes"
-    os.makedirs(resume_dir, exist_ok=True)
-    
+    _ensure_upload_dir(resume_dir)
+
     created_applicants = []
     files_to_process = []
-    
+
     for file in files:
         if file.filename.lower().endswith('.zip'):
             import zipfile
             import tempfile
             # Create a temp directory inside resume_dir
             temp_dir = tempfile.mkdtemp(dir=resume_dir)
-            zip_path = os.path.join(temp_dir, file.filename)
+            # basename the archive name too — a crafted zip filename must not
+            # steer where we drop the uploaded archive.
+            zip_path = os.path.join(temp_dir, os.path.basename(file.filename))
             with open(zip_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            
+
             try:
                 with zipfile.ZipFile(zip_path) as z:
                     for zip_info in z.infolist():
@@ -1916,18 +1956,27 @@ def upload_resumes(
                         if not filename or filename.startswith('.') or filename.startswith('__MACOSX'):
                             continue
                         if filename.lower().endswith(('.pdf', '.docx', '.txt')):
+                            # zip-slip defense: reject any entry that would resolve
+                            # outside resume_dir (basename above already strips
+                            # traversal, this is the belt-and-suspenders check).
+                            target_path = _safe_upload_path(resume_dir, filename)
+                            if not target_path:
+                                continue
                             source_file = z.open(zip_info)
-                            target_path = os.path.join(resume_dir, filename)
                             with open(target_path, "wb") as target_buffer:
                                 shutil.copyfileobj(source_file, target_buffer)
                             files_to_process.append((target_path, filename))
             except Exception as e:
                 print(f"Error unzipping {file.filename}: {e}")
         else:
-            file_path = f"{resume_dir}/{file.filename}"
+            # Sanitize the client-supplied filename before writing — a name like
+            # "../../evil" would otherwise escape resume_dir.
+            file_path = _safe_upload_path(resume_dir, file.filename)
+            if not file_path:
+                continue
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            files_to_process.append((file_path, file.filename))
+            files_to_process.append((file_path, os.path.basename(file.filename)))
 
     from dotenv import load_dotenv
     load_dotenv()
@@ -2108,7 +2157,7 @@ def update_applicant(
 @router.post("/applicants/{applicant_id}/schedule", response_model=ApplicantOut)
 def schedule_interview(
     applicant_id: UUID,
-    data: dict,
+    data: ScheduleInterviewIn,
     current_user: User = Depends(get_current_user),
     active_org_id: Optional[UUID] = Depends(get_active_org_id),
     db: Session = Depends(get_db)
@@ -2119,8 +2168,8 @@ def schedule_interview(
     from app.utils.email_sender import send_ical_invitation_email
 
     applicant = _verify_applicant_access(applicant_id, current_user, active_org_id, db)
-    stage = data.get("stage", "functional")  # 'screening' or 'functional'
-    scheduled_at_raw = data.get("scheduled_at")
+    stage = data.stage  # 'screening' or 'functional'
+    scheduled_at_raw = data.scheduled_at
 
     if not scheduled_at_raw:
         raise HTTPException(status_code=400, detail="scheduled_at is required")

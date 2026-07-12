@@ -1,5 +1,24 @@
 'use client';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 8-dot gaze calibration hook (React).
+//
+// Drives the on-screen calibration flow: it shows a dot at each screen edge/corner,
+// asks the candidate to look at it, and collects per-dot samples via MediaPipe
+// FaceLandmarker (iris-in-socket offsetX + the blendshape world-vertical signal +
+// deterministic head pitch). From those samples it:
+//   • learns the personalised on-screen vertical BAND edges [vTopEdge, vBottomEdge]
+//     (median of the world-vertical gaze at the top/bottom dots) that feed
+//     deriveVerticalBand → live up/down detection, and
+//   • decides whether the calibration is trustworthy (coverage / horizontal sweep /
+//     vertical sweep / per-dot steadiness) via evaluateCalibrationAcceptance.
+//
+// Every physically-meaningful signal, unit, and acceptance rule lives in the sibling
+// gazeVerticalMath.ts / proctoringGazeThresholdsV3.ts; this file only samples, aggregates,
+// and sequences the dots. It intentionally shares the SAME blendshape + head-pitch frame
+// as live detection so the band and the live reading are directly comparable.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { useCallback, useRef, useState } from 'react';
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 import {
@@ -113,6 +132,7 @@ export type CalibrationState = {
   error: string | null;
 };
 
+/** Safe landmark accessor: returns the indexed MediaPipe face landmark, or undefined if absent. */
 function getFacePoint(
   landmarks: FaceLandmarkerResult['faceLandmarks'][number] | undefined,
   index: number,
@@ -145,6 +165,12 @@ function eyeInHeadVertical(result: FaceLandmarkerResult | null): number {
   return down - up;
 }
 
+/**
+ * Detect one frame and reduce it to a single calibration sample, or null if the frame is
+ * unusable (no face / closed eye / missing landmarks / implausible magnitude). Returning null
+ * — rather than a fabricated value — is what keeps blinks, no-face, and bad tracking frames from
+ * masquerading as valid calibration data (they simply lower the per-dot sample count → coverage).
+ */
 function sampleIrisOffset(
   faceTask: FaceLandmarker,
   video: HTMLVideoElement,
@@ -156,7 +182,7 @@ function sampleIrisOffset(
     return null;
   }
   const lm = result?.faceLandmarks?.[0];
-  if (!lm) return null;
+  if (!lm) return null; // no face this frame → drop (feeds the coverage acceptance gate)
 
   const leftOuter  = getFacePoint(lm, 33);
   const leftInner  = getFacePoint(lm, 133);
@@ -183,21 +209,26 @@ function sampleIrisOffset(
   // closed eyes used to slip through as "valid" calibration data.
   if (rawLeftH < MIN_EYE_OPEN_HEIGHT || rawRightH < MIN_EYE_OPEN_HEIGHT) return null;
 
+  // Eye span used to normalise the iris offset into socket-relative units (clamped away from 0
+  // so a degenerate landmark frame can't divide by zero). Width = corner-to-corner, height = lid gap.
   const leftW  = Math.max(Math.abs(leftOuter.x  - leftInner.x),  0.0001);
   const rightW = Math.max(Math.abs(rightOuter.x - rightInner.x), 0.0001);
   const leftH  = Math.max(rawLeftH,  0.0001);
   const rightH = Math.max(rawRightH, 0.0001);
 
+  // Socket centre = midpoint of the two eye corners (X) and of the two lids (Y).
   const leftMidX  = (leftOuter.x  + leftInner.x)  / 2;
   const rightMidX = (rightOuter.x + rightInner.x) / 2;
   const leftMidY  = (lUp.y + lDown.y) / 2;
   const rightMidY = (rUp.y + rDown.y) / 2;
 
+  // Iris displacement from socket centre, normalised to half-span so ±1 ≈ iris at the socket edge.
   const lOffX = (leftIris.x  - leftMidX)  / (leftW  / 2);
   const rOffX = (rightIris.x - rightMidX) / (rightW / 2);
   const lOffY = (leftIris.y  - leftMidY)  / (leftH  / 2);
   const rOffY = (rightIris.y - rightMidY) / (rightH / 2);
 
+  // Average both eyes for a robust per-frame offset (offsetY is debug-only; see IrisSample).
   const offsetX = (lOffX + rOffX) / 2;
   const offsetY = (lOffY + rOffY) / 2;
 
@@ -215,6 +246,7 @@ function sampleIrisOffset(
   return { offsetX, offsetY, eyeInHeadV: eyeInHeadVertical(result), headPitch };
 }
 
+/** Median (outlier-robust central tendency — preferred over mean for the per-dot edge estimates). */
 function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -224,17 +256,20 @@ function median(values: number[]): number {
     : sorted[mid]!;
 }
 
+/** Arithmetic mean (used for per-dot centre + as the reference for the steadiness std). */
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+/** Population std about a supplied average — the per-dot steadiness metric gated in computeResult. */
 function standardDeviation(values: number[], average: number): number {
   if (values.length <= 1) return 0;
   const variance = values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length;
   return Math.sqrt(variance);
 }
 
+/** Median iris offset on one axis for a single named dot, or null if that dot has no samples. */
 function pointMedian(
   allPointSamples: PointSamples[],
   pointId: string,
@@ -245,18 +280,26 @@ function pointMedian(
   return median(point.samples.map((sample) => sample[axis]));
 }
 
+/** Mean over only the finite entries (nulls/NaN dropped), returning `fallback` if none survive. */
 function averageFinite(values: Array<number | null | undefined>, fallback = 0): number {
   const finite = values.filter((value): value is number => Number.isFinite(value));
   if (!finite.length) return fallback;
   return finite.reduce((sum, value) => sum + value, 0) / finite.length;
 }
 
+/** Like averageFinite but yields null (not a fallback) when no finite entries exist, so callers can
+ *  distinguish "missing pair" from a real zero when averaging opposite-dot pairs into neutral. */
 function averageFiniteOrNull(values: Array<number | null | undefined>): number | null {
   const finite = values.filter((value): value is number => Number.isFinite(value));
   if (!finite.length) return null;
   return finite.reduce((sum, value) => sum + value, 0) / finite.length;
 }
 
+/**
+ * Aggregate all per-dot samples into the final CalibrationResult: the personalised iris-offset
+ * thresholds + neutral centre (horizontal), the world-vertical BAND edges (feeds live up/down), the
+ * accept/reject trust decision, and a magnitude-aware quality score. Pure over its input; no I/O.
+ */
 function computeResult(allPointSamples: PointSamples[]): CalibrationResult {
   const allX = allPointSamples.flatMap((point) => point.samples.map((sample) => sample.offsetX));
   const allY = allPointSamples.flatMap((point) => point.samples.map((sample) => sample.offsetY));
@@ -264,7 +307,8 @@ function computeResult(allPointSamples: PointSamples[]): CalibrationResult {
   const fallbackNeutralY = median(allY);
 
   // If a center point exists, use it. The current 8-dot calibration does not sample
-  // center, so infer neutral from opposite dot pairs instead.
+  // center, so infer neutral from opposite dot pairs instead: averaging opposite edges
+  // (e.g. tl+tr, ml+mr) cancels the symmetric gaze offset and leaves the rig/head bias.
   const centerData = allPointSamples.find((p) => p.pointId === 'mc');
   const neutralX = centerData
     ? median(centerData.samples.map((s) => s.offsetX))
@@ -327,11 +371,13 @@ function computeResult(allPointSamples: PointSamples[]): CalibrationResult {
   // None assume which screen direction maps to +X or +v, so a mirrored/raw frame cannot flip it.
   const dotMeanX: number[] = [];
   const dotMeanY: number[] = [];
+  // Worst-case aggregates across dots: the WEAKEST-covered dot gates coverage, and the LEAST-steady
+  // dot gates steadiness — a single bad dot should fail calibration, not be averaged away.
   let minValidSamples = Number.POSITIVE_INFINITY;
   let maxDotStdX = 0;
   let maxDotStdV = 0;
   for (const pd of allPointSamples) {
-    if (pd.pointId === 'mc') continue;
+    if (pd.pointId === 'mc') continue; // center dot (if ever added) is the neutral, not an edge
     minValidSamples = Math.min(minValidSamples, pd.samples.length);
     if (!pd.samples.length) continue;
     const xs = pd.samples.map((s) => s.offsetX);
@@ -412,6 +458,12 @@ function computeResult(allPointSamples: PointSamples[]): CalibrationResult {
   };
 }
 
+/**
+ * React hook exposing the calibration state machine. Returns `calState` (phase +
+ * progress + result) plus three actions: startCalibration (load model, show intro),
+ * beginPoints (run the dot sequence and compute the result), and abort. The FaceLandmarker,
+ * abort flag, and accumulated per-dot samples are held in refs so re-renders don't reset them.
+ */
 export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | null>) {
   const [calState, setCalState] = useState<CalibrationState>({
     phase: 'idle',
@@ -425,6 +477,11 @@ export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | 
   const abortRef = useRef(false);
   const allPointSamplesRef = useRef<PointSamples[]>([]);
 
+  /**
+   * Start (or restart) calibration: reset the abort flag + accumulated samples, enter the intro
+   * phase, and lazily create the MediaPipe FaceLandmarker (blendshapes ON — the vertical band is
+   * learned from them). On model-load failure, transitions to the 'error' phase.
+   */
   // Call this from the intro screen's "Start" button
   const startCalibration = useCallback(async () => {
     abortRef.current = false;
@@ -457,6 +514,12 @@ export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | 
     }
   }, []);
 
+  /**
+   * Run the dot sequence: for each of the 8 perimeter dots, drive the per-dot state machine
+   * (waiting → sampling → between), collect up to SAMPLES_PER_POINT samples, then aggregate
+   * everything into a CalibrationResult on the 'done' phase. Every phase transition re-checks
+   * abortRef so the flow can be cancelled mid-run without leaving a stale result.
+   */
   // Call this when user clicks "Begin" after reading the intro
   const beginPoints = useCallback(async () => {
     const video = videoRef.current;
@@ -485,11 +548,12 @@ export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | 
       for (let j = 0; j < SAMPLES_PER_POINT; j++) {
         if (abortRef.current) return;
         const sample = sampleIrisOffset(faceTask, video);
-        if (sample) samples.push(sample);
+        if (sample) samples.push(sample); // null (blink/no-face) frames are skipped, not padded
         setCalState((s) => ({ ...s, samplesCollected: samples.length }));
         await sleep(SAMPLE_INTERVAL_MS);
       }
 
+      // Retain the surviving samples for this dot (may be < SAMPLES_PER_POINT → lowers coverage).
       allPointSamplesRef.current.push({ pointId: point.id, samples });
 
       // "between" phase (skip after last point)
@@ -501,10 +565,12 @@ export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | 
 
     if (abortRef.current) return;
 
+    // All dots sampled: aggregate into the band + trust decision and surface it on the done screen.
     const result = computeResult(allPointSamplesRef.current);
     setCalState((s) => ({ ...s, phase: 'done', result }));
   }, [videoRef]);
 
+  /** Cancel any in-flight run (checked at every phase boundary) and reset back to idle. */
   const abort = useCallback(() => {
     abortRef.current = true;
     setCalState({ phase: 'idle', currentPointIndex: -1, samplesCollected: 0, result: null, error: null });
@@ -513,6 +579,7 @@ export function useGazeCalibration(videoRef: React.RefObject<HTMLVideoElement | 
   return { calState, startCalibration, beginPoints, abort };
 }
 
+/** Promise-based delay used to pace the phase transitions and the fixed sampling interval. */
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }

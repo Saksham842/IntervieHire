@@ -7,10 +7,11 @@ import { navigateToJobDetail } from './job-detail';
 import { recalculateJobPipelines } from './kanban-swarm';
 import { navigateToTab, openDrawer } from './navigation';
 import { renderJobCards } from './render-views';
+import { renderCareerJobs } from './career-panel';
 import { soundEngine } from './sound';
 import { navigateToSourcing, showPremiumToast } from './sourcing';
 import { AppState } from './state';
-import { getDataSource, ENGINE_WEB_URL, apiCreateTestSession, apiUpdateJobStatus } from './api';
+import { getDataSource, ENGINE_WEB_URL, apiCreateTestSession, apiPatchJobSettings } from './api';
 import {
   ensureFunctionalBlueprint, computeCalibration, computeGenerationPlan, analyzeRequirements,
   generateFunctionalOutline, localFunctionalBlueprint, pinBlueprintToRequirements,
@@ -213,7 +214,11 @@ function openPublishJobModal(jobId) {
     if (roleName) job.roleName = roleName;
     job.tags = tagsVal ? tagsVal.split(',').map(t => t.trim()).filter(Boolean) : [];
     const prevStatus = job.status;
+    const prevListed = job.listedOnCareer;
     job.status = 'published';
+    // Auto-list on publish: a published job goes straight onto the public career
+    // page (careerPage.enabled below is local-only, so also persist is_job_listed).
+    job.listedOnCareer = true;
 
     if (job.pipelineConfig) {
       job.pipelineConfig.careerPage.enabled = true;
@@ -223,13 +228,17 @@ function openPublishJobModal(jobId) {
     }
 
     saveStateToLocalStorage();
+    renderCareerJobs(); // publish auto-lists → reflect it in the Career-view record panel
 
-    // Persist the published status to the backend so it survives a refresh.
-    // hydrateJobs() replaces AppState.jobs with the backend list on reload, so
-    // an unpersisted publish reverts to 'draft'. Roll back if the backend rejects.
+    // Persist BOTH published status and career-page listing to the backend so they
+    // survive a refresh. The public career query requires status='published' AND
+    // is_job_listed=true, so set both together. hydrateJobs() replaces AppState.jobs
+    // with the backend list on reload, so an unpersisted publish reverts to 'draft'.
+    // Roll back if the backend rejects.
     if (getDataSource() === 'api' && job._backend) {
-      apiUpdateJobStatus(job.id, 'published').catch((e) => {
+      apiPatchJobSettings(job.id, { status: 'published', is_job_listed: true }).catch((e) => {
         job.status = prevStatus;
+        job.listedOnCareer = prevListed;
         saveStateToLocalStorage();
         renderJobCards();
         showPremiumToast(`Couldn't publish: ${(e && e.message) || 'backend error'}`, 'error');

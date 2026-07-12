@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -14,6 +14,7 @@ from app.models.organisation import Organisation
 from app.config import settings
 from app.utils.google_calendar import create_calendar_event, update_calendar_event
 from app.utils.email_sender import send_ical_invitation_email
+from app.routers.invites import _rate_limit
 
 from google_auth_oauthlib.flow import Flow
 
@@ -102,7 +103,9 @@ def oauth2callback(code: str, state: str, db: Session = Depends(get_db)):
     """)
 
 @router.get("/schedule/{token}")
-def get_public_schedule_info(token: str, db: Session = Depends(get_db)):
+def get_public_schedule_info(token: str, request: Request, db: Session = Depends(get_db)):
+    # Unauthenticated PII lookup — throttle per-IP to blunt token probing/scraping.
+    _rate_limit(request, limit=60, window=60.0)
     applicant = db.query(Applicant).filter(Applicant.scheduling_token == token).first()
     if not applicant:
         raise HTTPException(status_code=404, detail="Invalid or expired scheduling token.")
@@ -128,7 +131,9 @@ def get_public_schedule_info(token: str, db: Session = Depends(get_db)):
     }
 
 @router.get("/interview-session/{session_id}")
-def get_public_interview_session_info(session_id: UUID, db: Session = Depends(get_db)):
+def get_public_interview_session_info(session_id: UUID, request: Request, db: Session = Depends(get_db)):
+    # Unauthenticated PII lookup by applicant id — throttle per-IP against enumeration.
+    _rate_limit(request, limit=60, window=60.0)
     applicant = db.query(Applicant).filter(Applicant.id == session_id).first()
     if not applicant:
         raise HTTPException(status_code=404, detail="Session not found.")
@@ -154,7 +159,9 @@ def get_public_interview_session_info(session_id: UUID, db: Session = Depends(ge
     }
 
 @router.get("/confirm/{token}", response_class=HTMLResponse)
-def confirm_interview_slot(token: str, db: Session = Depends(get_db)):
+def confirm_interview_slot(token: str, request: Request, db: Session = Depends(get_db)):
+    # Unauthenticated state-changing token endpoint — throttle per-IP.
+    _rate_limit(request, limit=30, window=60.0)
     applicant = db.query(Applicant).filter(Applicant.scheduling_token == token).first()
     if not applicant:
         raise HTTPException(status_code=404, detail="Invalid or expired scheduling token.")
@@ -312,9 +319,12 @@ def confirm_interview_slot(token: str, db: Session = Depends(get_db)):
 @router.post("/reschedule/{token}")
 def public_reschedule_interview(
     token: str,
+    request: Request,
     new_time: str = Body(..., embed=True),
     db: Session = Depends(get_db)
 ):
+    # Unauthenticated state-changing token endpoint — throttle per-IP.
+    _rate_limit(request, limit=30, window=60.0)
     applicant = db.query(Applicant).filter(Applicant.scheduling_token == token).first()
     if not applicant:
         raise HTTPException(status_code=404, detail="Invalid or expired scheduling token.")

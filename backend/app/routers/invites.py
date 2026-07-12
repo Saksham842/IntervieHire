@@ -48,19 +48,25 @@ _RL_LOCK = threading.Lock()
 _RL_BUCKETS: dict = {}  # ip -> (count, window_start_monotonic)
 
 
-def _rate_limit(request: Optional[Request], *, limit: int, window: float = 60.0) -> None:
-    ip = (request.client.host if request and request.client else "unknown")
+def _rate_limit(request: Optional[Request], *, limit: int, window: float = 60.0, key: Optional[str] = None) -> None:
+    # Bucket on the caller IP by default; pass an explicit `key` (e.g.
+    # "login:email:<addr>") to throttle a different dimension such as the target
+    # account, so credential-stuffing across IPs is still capped per-account.
+    if key is not None:
+        bucket_key = key
+    else:
+        bucket_key = (request.client.host if request and request.client else "unknown")
     now = time.monotonic()
     with _RL_LOCK:
         # Opportunistic prune so the dict can't grow unbounded.
         if len(_RL_BUCKETS) > 5000:
             for stale in [k for k, v in _RL_BUCKETS.items() if now - v[1] > window]:
                 _RL_BUCKETS.pop(stale, None)
-        count, start = _RL_BUCKETS.get(ip, (0, now))
+        count, start = _RL_BUCKETS.get(bucket_key, (0, now))
         if now - start > window:
             count, start = 0, now
         count += 1
-        _RL_BUCKETS[ip] = (count, start)
+        _RL_BUCKETS[bucket_key] = (count, start)
         if count > limit:
             raise HTTPException(status_code=429, detail="Too many requests. Please slow down and try again shortly.")
 

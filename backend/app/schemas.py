@@ -287,8 +287,16 @@ class ApplicantUpdateIn(BaseModel):
  
 class CollaboratorIn(BaseModel):
     user_id: UUID
- 
- 
+
+
+class ScheduleInterviewIn(BaseModel):
+    # ISO-8601 datetime string (a trailing 'Z' is accepted); parsed in the handler.
+    scheduled_at: str
+    # 'screening' routes to the recruiter-screening stage; any other value
+    # (default) routes to the functional interview stage — matches prior dict behaviour.
+    stage: str = "functional"
+
+
 # ─── USAGE / ANALYTICS ───────────────────────────────────────────────────────
  
 class UsageStatsOut(BaseModel):

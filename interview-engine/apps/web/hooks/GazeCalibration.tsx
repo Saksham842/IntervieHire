@@ -1,5 +1,23 @@
 'use client';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Full-screen 8-dot gaze calibration OVERLAY (proctoring setup).
+//
+// This is the pure PRESENTATION layer: it renders the intro instructions, the
+// animated dot grid, the per-dot sampling ring, and the final quality/acceptance
+// screen. All measurement, sequencing, and accept/reject logic lives in the
+// companion hook useGazeCalibration.ts — this component only reflects `calState`
+// (phase, current dot index, samples collected, result) and calls the hook's
+// startCalibration / beginPoints / abort actions in response to user input.
+//
+// The candidate looks toward each screen-edge dot in turn while the hook records
+// their world-vertical gaze `v` and iris-X sweep; the resulting per-person band +
+// thresholds (see gazeVerticalMath.ts / proctoringGazeThresholdsV3.ts) drive live
+// gaze-away detection. A REJECTED calibration (no face, closed eyes, or eyes that
+// never swept to the dots) keeps the candidate on the quality screen with a reason
+// and a Recalibrate button rather than proceeding — the anti-spoof gate.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { useEffect, useRef, useState } from 'react';
 import { CALIBRATION_POINTS, useGazeCalibration, type CalibrationResult } from './useGazeCalibration';
 import { MIN_OPPOSITE_EDGE_GAP_X, MIN_V_BAND_WIDTH } from './proctoringGazeThresholdsV3';
@@ -12,6 +30,11 @@ type Props = {
 
 // ── tiny helpers ────────────────────────────────────────────────────────────
 
+/**
+ * Horizontal quality meter for the final screen. Maps the 0–1 `qualityScore` to a
+ * percentage plus a colour/label band (green ≥70 good, amber ≥40 fair, red poor) so
+ * the candidate can self-assess whether to recalibrate before continuing.
+ */
 function QualityBar({ score }: { score: number }) {
   const pct = Math.round(score * 100);
   const colour =
@@ -42,16 +65,25 @@ function QualityBar({ score }: { score: number }) {
   );
 }
 
+/**
+ * A single calibration target. `x`/`y` are fractional positions (0–1) within the
+ * dot-grid container, mirroring CALIBRATION_POINTS' xFrac/yFrac; state props drive
+ * appearance: `active` = current target (larger, blue, glowing), `done` = already
+ * sampled (green), otherwise idle grey. `waiting` adds the ping ring that prompts
+ * the candidate to fixate before sampling begins.
+ */
 function Dot({
   x, y, active, done, waiting,
 }: {
   x: number; y: number; active: boolean; done: boolean; waiting: boolean;
 }) {
+  // Active dot is enlarged so the candidate's eyes are drawn to the true target.
   const size = active ? 28 : 16;
   return (
     <div
       style={{
         position: 'absolute',
+        // fractional coords → percentage offsets within the grid container
         left: `${x * 100}%`,
         top: `${y * 100}%`,
         transform: 'translate(-50%, -50%)',
@@ -86,6 +118,12 @@ function Dot({
   );
 }
 
+/**
+ * Circular progress ring overlaid on the active dot during the `sampling` phase.
+ * `progress` is 0–1 (samples collected / target); the stroke sweeps clockwise from
+ * 12 o'clock (rotate -90) via strokeDashoffset, giving the candidate a "hold your
+ * gaze" cue for the fixed dwell window.
+ */
 function SamplingRing({ progress }: { progress: number }) {
   const r = 22;
   const circ = 2 * Math.PI * r;
@@ -115,12 +153,25 @@ function SamplingRing({ progress }: { progress: number }) {
 
 // ── main component ───────────────────────────────────────────────────────────
 
+/**
+ * Full-screen calibration overlay. Drives the candidate through the intro →
+ * per-dot sampling → result sequence by rendering off the hook's `calState` and
+ * dispatching its actions. Reports the finished CalibrationResult upward via
+ * `onComplete` (only when accepted); `onSkip`, if provided, aborts and bypasses
+ * calibration entirely.
+ *
+ * @param videoRef  live camera element the hook reads frames from
+ * @param onComplete called once with an ACCEPTED result after the quality screen
+ * @param onSkip     optional escape hatch shown on the intro screen
+ */
 export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
   const { calState, startCalibration, beginPoints, abort } = useGazeCalibration(videoRef);
+  // Guards the one-time MediaPipe kickoff below against StrictMode double-mount.
   const hasStarted = useRef(false);
+  // A finished-but-untrusted result; gates the quality screen into recalibrate mode.
   const calibrationRejected = Boolean(calState.result && !calState.result.accepted);
 
-  // Kick off MediaPipe load as soon as the component mounts
+  // Kick off MediaPipe load as soon as the component mounts (once — see hasStarted).
   useEffect(() => {
     if (!hasStarted.current) {
       hasStarted.current = true;
@@ -135,17 +186,19 @@ export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
       // closed eyes, or eyes that never moved to the dots) keeps the candidate on the
       // quality screen with a reason and a Recalibrate button.
       if (!calState.result.accepted) return;
-      // Give user a moment to see the quality screen before closing
+      // Give user a moment to see the quality screen before closing (auto-advance).
       const t = setTimeout(() => onComplete(calState.result!), 2200);
       return () => clearTimeout(t);
     }
   }, [calState.phase, calState.result, onComplete]);
 
+  // The dot currently being sampled (index < 0 before the sequence starts).
   const currentPoint =
     calState.currentPointIndex >= 0
       ? CALIBRATION_POINTS[calState.currentPointIndex]
       : null;
 
+  // Ring fill 0–1: 20 is the target sample count per dot (matches the hook's dwell).
   const samplingProgress =
     calState.phase === 'sampling'
       ? calState.samplesCollected / 20
@@ -283,7 +336,9 @@ export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
               </div>
             </div>
 
-            {/* dot grid */}
+            {/* dot grid — inset padding keeps edge dots off the very screen border so
+                the candidate's eyes still sweep a real angle; Dot x/y fractions are
+                relative to THIS box, so its bounds define the calibration geometry. */}
             <div style={{ position: 'absolute', inset: '80px 40px 60px 40px' }}>
               {CALIBRATION_POINTS.map((pt, idx) => (
                 <Dot
@@ -316,6 +371,10 @@ export function GazeCalibration({ videoRef, onComplete, onSkip }: Props) {
         )}
 
         {/* ── DONE ──────────────────────────────────────────────────── */}
+        {/* Quality/acceptance screen. On acceptance it auto-advances (effect above);
+            on rejection it shows the reason + a Recalibrate button and never proceeds.
+            The metrics grid below colour-codes each measured sweep against its
+            anti-spoof floor (green ok / red low) for transparency. */}
         {calState.phase === 'done' && calState.result && (
           <div
             style={{

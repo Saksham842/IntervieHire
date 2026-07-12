@@ -404,6 +404,50 @@
 .sub-metric .lbl { font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .sub-metric .val { font-family: var(--font-display); font-weight: 800; font-size: 1.35rem; color: var(--color-text-primary); }
 
+/* Career-page jobs record + quick-manage panel (dashboard Career view). Full-width
+   card below the settings grid; lists the jobs live on the public career page. */
+.career-jobs-panel { padding: 28px; margin-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.career-jobs-ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.career-job-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  transition: var(--spring-fast);
+}
+.career-job-row:hover { border-color: var(--glass-border-gold); transform: translateY(-1px); box-shadow: var(--glass-shadow-hover); }
+.career-job-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.career-job-name { font-weight: 600; font-size: 0.92rem; color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.career-job-date { font-size: 0.78rem; color: var(--color-text-muted); white-space: nowrap; }
+.career-job-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.career-job-view { font-size: 0.82rem; color: var(--color-gold); text-decoration: none; white-space: nowrap; transition: var(--spring-fast); }
+.career-job-view:hover { color: var(--color-gold-light); }
+.career-job-view.is-disabled { color: var(--color-text-faint); cursor: default; pointer-events: none; }
+.btn-remove-career {
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  color: var(--color-text-muted);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--spring-fast);
+}
+.btn-remove-career:hover { border-color: rgba(239,68,68,0.5); color: #f87171; background: rgba(239,68,68,0.08); }
+.career-jobs-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  background: var(--glass-bg);
+  border: 1px dashed var(--glass-border);
+  border-radius: 12px;
+}
+
 /* Checkbox group */
 .checkbox-group { display: flex; flex-direction: column; gap: 8px; }
 .checkbox-label { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }

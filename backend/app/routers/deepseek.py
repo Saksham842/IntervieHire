@@ -3,7 +3,12 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import urllib.request
 import json
+import logging
 from app.config import settings
+from app.models.user import User
+from app.utils.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -12,9 +17,9 @@ class DeepSeekRequest(BaseModel):
     jsonMode: Optional[bool] = False
 
 @router.post("")
-def proxy_deepseek(data: DeepSeekRequest):
+def proxy_deepseek(data: DeepSeekRequest, current_user: User = Depends(get_current_user)):
     import os
-    
+
     deepseek_key = settings.DEEPSEEK_API_KEY
     groq_key = settings.GROQ_API_KEY if hasattr(settings, "GROQ_API_KEY") else os.getenv("GROQ_API_KEY")
     grok_key = (settings.GROK_API_KEY if hasattr(settings, "GROK_API_KEY") else None) or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
@@ -45,14 +50,7 @@ def proxy_deepseek(data: DeepSeekRequest):
             with urllib.request.urlopen(req, timeout=40) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as err:
-            import traceback
-            try:
-                with open("c:\\Users\\KRISHNA GUPTA\\Desktop\\interviehire\\deepseek_error.log", "a", encoding="utf-8") as f:
-                    f.write(f"--- DeepSeek proxy failure: {err} ---\n")
-                    traceback.print_exc(file=f)
-            except:
-                pass
-            print(f"DeepSeek proxy failure: {err}. Falling back to next LLM...")
+            logger.warning("DeepSeek proxy failure: %s. Falling back to next LLM...", err, exc_info=True)
 
     # 2. Attempt Groq
     if groq_key:
@@ -162,11 +160,10 @@ def proxy_deepseek(data: DeepSeekRequest):
             print(f"Gemini proxy failure: {err}")
 
     # If all fail or no keys exist
-    try:
-        with open("c:\\Users\\KRISHNA GUPTA\\Desktop\\interviehire\\deepseek_error.log", "a", encoding="utf-8") as f:
-            f.write(f"All attempts failed. Keys present: DeepSeek={bool(deepseek_key)}, Groq={bool(groq_key)}, Grok={bool(grok_key)}, Gemini={bool(gemini_key)}\n")
-    except:
-        pass
+    logger.error(
+        "All LLM attempts failed. Keys present: DeepSeek=%s, Groq=%s, Grok=%s, Gemini=%s",
+        bool(deepseek_key), bool(groq_key), bool(grok_key), bool(gemini_key),
+    )
     raise HTTPException(
         status_code=500,
         detail="No LLM API key configured (DeepSeek, Groq, Grok, Gemini), or all attempts failed."
