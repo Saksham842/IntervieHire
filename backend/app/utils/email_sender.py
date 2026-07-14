@@ -612,3 +612,82 @@ def send_interview_invite_email(
         plain_content=plain_content,
     )
 
+
+def send_team_invite_email(
+    invitee_name: str,
+    invitee_email: str,
+    org_name: str | None,
+    inviter_name: str | None,
+    role: str | None,
+    accept_link: str,
+) -> bool:
+    """Team-member invitation: invites a colleague to join an organisation on
+    IntervieHire. The link points at the signup page (email prefilled); the
+    invitee sets a password there and `POST /api/auth/signup` activates their
+    already-provisioned account (status invited -> active) into the org with the
+    role assigned at invite time. Transport + SMTP-less simulation are handled by
+    ``send_html_email`` (Resend when configured; Railway blocks direct SMTP)."""
+    from html import escape as _esc
+
+    greeting_name = _esc(invitee_name) if invitee_name else "there"
+    org_label = _esc(org_name) if org_name else "the team"
+    inviter_label = _esc(inviter_name) if inviter_name else "A teammate"
+    role_label = _esc(role) if role else "team member"
+    subject = f"You've been invited to join {org_name} on IntervieHire" if org_name else "You've been invited to IntervieHire"
+
+    plain_content = "\n".join([
+        f"Hi {invitee_name or 'there'},",
+        "",
+        f"{inviter_name or 'A teammate'} has invited you to join {org_name or 'the team'} on IntervieHire as {role or 'a team member'}.",
+        "",
+        f"Accept your invitation and set your password: {accept_link}",
+        "",
+        "Use this email address when you sign up so your invitation is recognised.",
+        "",
+        "— The IntervieHire Team",
+    ])
+
+    html = f"""<!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>You're invited to IntervieHire</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+            body {{ font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#f4f4f6; color:#17171F; margin:0; padding:40px 0; }}
+            .card {{ max-width:560px; margin:0 auto; background:#ffffff; border:1px solid #ECECF1; border-radius:18px; padding:44px 40px; box-shadow:0 8px 30px rgba(23,23,31,0.06); }}
+            h1 {{ font-size:22px; font-weight:700; color:#17171F; margin:0 0 18px; }}
+            p {{ font-size:15px; line-height:1.65; color:#3A3A45; margin:0 0 16px; }}
+            .role {{ font-weight:600; color:#17171F; }}
+            .cta {{ text-align:center; margin:32px 0 18px; }}
+            .btn {{ display:inline-block; background:#F5542E; color:#ffffff !important; text-decoration:none; font-weight:600; font-size:15px; padding:14px 34px; border-radius:10px; }}
+            .link {{ font-size:13px; color:#6B6B76; word-break:break-all; margin-top:0; }}
+            .meta {{ font-size:13px; color:#6B6B76; }}
+            .footer {{ font-size:12px; color:#9A9AA5; margin-top:36px; border-top:1px solid #ECECF1; padding-top:20px; text-align:center; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>You're invited to join {org_label}</h1>
+            <p>Hi {greeting_name},</p>
+            <p>{inviter_label} has invited you to join <span class="role">{org_label}</span> on IntervieHire as <span class="role">{role_label}</span>.</p>
+            <div class="cta">
+                <a href="{accept_link}" class="btn">Accept invitation</a>
+            </div>
+            <p class="link">{accept_link}</p>
+            <p class="meta">Use <strong>{_esc(invitee_email)}</strong> when you sign up so your invitation is recognised, and choose a password to finish.</p>
+            <div class="footer">This invitation was sent by IntervieHire. If you weren't expecting it, you can safely ignore this email.</div>
+        </div>
+    </body>
+    </html>
+    """
+
+    return send_html_email(
+        invitee_email,
+        subject,
+        html,
+        from_email=settings.INVITE_FROM_EMAIL,
+        plain_content=plain_content,
+    )
+

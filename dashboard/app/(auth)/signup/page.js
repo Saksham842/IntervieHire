@@ -22,6 +22,19 @@ export default function SignupPage() {
     return () => { cancelled = true; };
   }, [router]);
 
+  // Prefill from a team invitation link (…/signup?email=…&name=…). Signing up
+  // with this email activates the invited account into its org with the assigned
+  // role. No params → a normal empty signup form, unchanged.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const email = params.get('email');
+    const name = params.get('name');
+    if (email || name) {
+      setForm((f) => ({ ...f, email: email || f.email, name: name || f.name }));
+    }
+  }, []);
+
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   function validate() {

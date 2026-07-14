@@ -5,8 +5,15 @@ from typing import Optional
 
 from app.database import get_db
 from app.models.user import User, UserStatus, UserType
+from app.models.organisation import Organisation
 from app.schemas import TeamListOut, UserOut, InviteMemberIn, UpdateMemberIn
 from app.utils.auth import get_current_user, get_active_org_id
+from app.utils.email_sender import send_team_invite_email
+from app.config import settings
+from urllib.parse import quote
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -61,6 +68,31 @@ def invite_member(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Email the invitation with an accept link. It points at the signup page with
+    # the email prefilled; the invitee sets a password there and signup activates
+    # this already-provisioned account (invited -> active) into the org with the
+    # assigned role. Non-fatal: a mail failure must not undo a created invite.
+    try:
+        org = db.query(Organisation).filter(Organisation.id == org_id).first()
+        org_name = org.org_name if org else None
+        frontend = (settings.FRONTEND_URL or "").split(",")[0].strip().rstrip("/") or "http://localhost:3000"
+        accept_link = (
+            f"{frontend}/signup?email={quote(new_user.email)}"
+            f"&name={quote(new_user.name or '')}&invited=1"
+        )
+        role_label = data.user_type.value.replace("_", " ").title() if data.user_type else "Team member"
+        send_team_invite_email(
+            invitee_name=new_user.name,
+            invitee_email=new_user.email,
+            org_name=org_name,
+            inviter_name=current_user.name,
+            role=role_label,
+            accept_link=accept_link,
+        )
+    except Exception as mail_err:
+        logger.error(f"Failed to send team invite email to {new_user.email}: {mail_err}")
+
     return new_user
 
 
