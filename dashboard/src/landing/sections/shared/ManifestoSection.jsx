@@ -46,7 +46,7 @@ export const ManifestoSection = () => {
   let idx = 0;
 
   return (
-    <div ref={wrapRef} style={{ height: '200vh', background: '#000', position: 'relative', overflowX: 'hidden' }}>
+    <div ref={wrapRef} style={{ height: '200vh', background: '#000', position: 'relative' }}>
       <div style={{
         position: 'sticky', top: 0, height: '100vh',
         display: 'flex', flexDirection: 'column',
@@ -71,7 +71,7 @@ export const ManifestoSection = () => {
                     fontWeight: 700,
                     fontStyle: 'italic',
                     fontSize: 'clamp(1.5rem, 5vw, 4rem)',
-                    color: li === 0 ? '#F5F0E8' : '#2dd4bf',
+                    color: '#2dd4bf',
                     letterSpacing: '-0.02em',
                     lineHeight: 1.2,
                     opacity: 0,
