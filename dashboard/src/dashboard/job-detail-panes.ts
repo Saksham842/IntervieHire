@@ -1708,3 +1708,50 @@ function bindAddApplicantsPanel(job, paneKey, source, targetStage) {
 		countSpan.textContent = uploadedFiles.length;
 	}
 }
+
+// ── Subtabs helpers ───────────────────────────────────────────────────────────
+
+function getCandidateSubtab(c) {
+	if (c.interviewStatus === 'Completed') return 'completed';
+	if (c.interviewStatus === 'Incomplete') return 'partially-completed';
+	if (c.interviewStatus === 'Slot Missed') return 'window-missed';
+	return 'scheduled';
+}
+
+function getOrInitActiveSubtab(stage, candidates) {
+	const appStateKey = stage === 'screening' ? 'activeScreeningSubtab' : 'activeFunctionalSubtab';
+	const fromAppState = AppState[appStateKey];
+	if (fromAppState && ['window-missed', 'scheduled', 'partially-completed', 'completed'].includes(fromAppState)) {
+		return fromAppState;
+	}
+	const key = `ih-subtab-${stage}`;
+	const saved = localStorage.getItem(key);
+	if (saved && ['window-missed', 'scheduled', 'partially-completed', 'completed'].includes(saved)) {
+		return saved;
+	}
+	const order = ['scheduled', 'completed', 'partially-completed', 'window-missed'];
+	for (const tab of order) {
+		if (candidates.some((c) => getCandidateSubtab(c) === tab)) return tab;
+	}
+	return 'scheduled';
+}
+
+function buildSubtabsBarHTML(stage, counts, activeSubtab) {
+	const labels = {
+		'window-missed': 'Window Missed',
+		scheduled: 'Scheduled',
+		'partially-completed': 'Partially Completed',
+		completed: 'Completed',
+	};
+	const keys = ['window-missed', 'scheduled', 'partially-completed', 'completed'];
+	return `
+    <div class="stage-subtabs" data-stage="${stage}">
+      ${keys.map((k) => `
+        <button class="stage-subtab-btn ${activeSubtab === k ? 'active' : ''}" data-stage="${stage}" data-subtab="${k}">
+          ${labels[k]}
+          <span class="stage-subtab-count">${counts[k] || 0}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
