@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiLogin, apiSignup, apiMe, isAuthed } from '../auth-client.js';
+import { apiLogin, apiSignup, apiMe, isAuthed } from '../auth-client';
 
 // SVG Icons
 const EyeOpen = () => (

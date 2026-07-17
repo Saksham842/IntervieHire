@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthShell, ErrorBanner, SubmitButton } from '../AuthShell';
-import { apiSignup, apiMe, isAuthed } from '../../../src/auth-client.js';
+import { apiSignup, apiMe, isAuthed } from '../../../src/auth-client';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

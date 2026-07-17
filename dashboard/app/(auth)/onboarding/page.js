@@ -8,7 +8,7 @@ import {
 	apiMe,
 	isAuthed,
 	clearAuthed,
-} from "../../../src/auth-client.js";
+} from "../../../src/auth-client";
 
 export default function OnboardingPage() {
 	const router = useRouter();

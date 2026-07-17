@@ -10,7 +10,7 @@ import {
 	apiLogout,
 	isAuthed,
 	clearAuthed,
-} from "../../src/auth-client.js";
+} from "../../src/auth-client";
 import {
 	apiGetPreferences,
 	apiUpdatePreferences,
