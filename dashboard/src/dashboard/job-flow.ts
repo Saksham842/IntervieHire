@@ -11,7 +11,7 @@ import { renderCareerJobs } from './career-panel';
 import { soundEngine } from './sound';
 import { navigateToSourcing, showPremiumToast } from './sourcing';
 import { AppState } from './state';
-import { getDataSource, ENGINE_WEB_URL, apiCreateTestSession, apiPatchJobSettings } from './api';
+import { getDataSource, ENGINE_WEB_URL, apiCreateTestSession, apiPatchJobSettings, apiUpdateJobStatus } from './api';
 import {
   ensureFunctionalBlueprint, computeCalibration, computeGenerationPlan, analyzeRequirements,
   generateFunctionalOutline, localFunctionalBlueprint, pinBlueprintToRequirements,

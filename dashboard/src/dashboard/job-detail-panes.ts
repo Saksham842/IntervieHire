@@ -1,6 +1,7 @@
 import { document, requestAnimationFrame, setTimeout } from "./runtime";
 import { escapeHTML, sourceLabel } from "./escape";
 import { saveStateToLocalStorage } from "./ai-api";
+import { isApiMode, apiUploadResumes } from "./api";
 import { renderDeepAnalysisPane } from "./deep-analysis";
 import { drawFunnelSVG, drawScoreDistributionSVG } from "./funnel-charts";
 import {
@@ -1585,7 +1586,7 @@ function bindAddApplicantsPanel(job, paneKey, source, targetStage) {
 		e.preventDefault();
 		dropzone.style.borderColor = "var(--glass-border)";
 		dropzone.style.background = "rgba(255,255,255,0.02)";
-		const files = Array.from(e.dataTransfer.files).filter((f) =>
+		const files = Array.from(e.dataTransfer.files).filter((f: File) =>
 			/\.(pdf|docx?|txt|zip)$/i.test(f.name),
 		);
 		if (files.length > 0) enqueueFiles(files);

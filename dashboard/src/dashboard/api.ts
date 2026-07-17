@@ -228,6 +228,19 @@ export async function apiScheduleCandidate(applicantId, scheduledAt, stage = 'sc
   return mapApplicantOutToCandidate(data);
 }
 
+export async function apiAddApplicantsBulk(jobId, candidates) {
+  const results = [];
+  for (const c of candidates) {
+    try {
+      const r = await apiAddApplicant(jobId, c);
+      results.push(r);
+    } catch (e) {
+      console.warn('apiAddApplicantsBulk: failed for', c, e);
+    }
+  }
+  return results;
+}
+
 // Mint a unique, unguessable per-candidate interview link bound to this applicant
 // (and optionally email it). Returns the raw backend payload
 // ({ token, link, status, expires_at, sent, ... }) — not mapped to a candidate,
