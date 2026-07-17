@@ -12,6 +12,7 @@ import { stopActiveCardPlayer, toggleCardPlayer } from "./kanban-dnd";
 import { recalculateJobPipelines, renderKanbanBoard } from "./kanban-swarm";
 import { triggerExcelExport } from "./navigation";
 import { renderBlueprintStudio } from "./blueprint-studio";
+import { renderInterviewAnalysisStage } from "./interview-analysis";
 import { renderTestInterviewPane } from "./test-interview";
 import {
 	filterCandidatesByDateRange,
