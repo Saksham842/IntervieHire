@@ -214,6 +214,11 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
             except Exception:
                 interview_settings = {}
 
+        # Tag which stage this (re)provision is for so the candidate room can tell a
+        # recruiter-screening session apart from a functional one (same shared row).
+        is_screening_stage = (applicant.functional_status is None)
+        interview_settings['stage'] = 'screening' if is_screening_stage else 'functional'
+
         if not session:
             session = InterviewSession(
                 id=session_id,
@@ -248,7 +253,6 @@ def sync_applicant_to_ai(db: Session, applicant: Applicant) -> Optional[Intervie
             db.refresh(session)
 
         # 5. Sync Questions based on current stage (screening or functional)
-        is_screening_stage = (applicant.functional_status is None)
         active_question_ids = []
 
         if is_screening_stage:

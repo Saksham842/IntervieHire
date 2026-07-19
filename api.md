@@ -6,6 +6,7 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-07-20** — Recruiter screening is now a distinct AI-avatar interview stage instead of just "the same room with different questions". `backend/app/utils/ai_sync.py` (`sync_applicant_to_ai`) now stamps `interview_settings['stage'] = 'screening' | 'functional'` into `InterviewSession.settings` (no schema change — reuses the existing free-form JSON column) so the candidate room can tell the two apart. Added **POST /api/public/interview-session/{session_id}/screening-outcome** (`backend/app/routers/public.py`, webhook-secret gated like the existing recording-upload route) — reads the already-persisted engine evaluation, writes the real verdict onto `Applicant.recruiter_screening`/`recruiter_screening_score`/`screening_status`/`screening_score` (which `report-page.js` and `deep-analysis.js` already render), and on a "Good fit" mapping calls the existing `_provision_invite_for_applicant(stage="functional")` to auto-mint + email the next-stage invite. Added **POST /api/interviews/{sessionId}/screening-outcome** (`interview-engine/apps/api/src/routes/transcript.routes.ts`) as a thin server-to-server relay to the backend route above. Candidate room (`interviewcandidateroom/page.tsx`) now: shows a "Recruiter Screening" header + 5:00 countdown that force-ends the call at 0:00 when the session's stage is `screening`; calls the new screening-outcome route after `/report` resolves; and replaces the end-of-call report card with either a "Continue to Functional Interview" link (fit) or a polite close-out message (not a fit) — the functional-interview experience itself, and every manual recruiter-driven invite/schedule action, are unchanged.
 - **2026-07-01** — Made every field of `OrganisationIn` optional on **PUT /api/organisation** and **POST /api/organisation** (`backend/app/schemas.py`): `org_name` changed from required `str` to `Optional[str] = None` (all other fields were already optional). Auth, response schema (`OrganisationOut`), and handler logic are UNCHANGED. Fixes the Career Page settings save (`apiUpdateOrganisation({ career_subdomain, career_intro })` in `dashboard/src/dashboard/api.js`), which sends only the two career fields and previously got **422 "org_name field required"**; the upsert's update branch already applies `model_dump(exclude_unset=True)`, so omitted fields (incl. `org_name`) are left untouched. Onboarding's separate `OnboardingIn` (POST /api/auth/onboarding) still requires `org_name`, so org creation is unaffected.
 - **2026-06-30** — Added **POST /api/jobs/{job_id}/duplicate** (`backend/app/routers/jobs.py`) — auth required; no request body; path param `job_id`:UUID; gated by `_verify_job_access` (404 if the job is not found or not in the caller's active org). Deep-copies the source job's config into a NEW independent job that is `status=draft` and `is_job_listed=false`, with `custom_job_id` reset to null and title suffixed " (Copy)"; also snapshots EVERY applicant (name/email/phone, resume data, all stage flags, screening/functional status+score, decision, report_url, scores) EXCEPT each copy's `scheduling_token` and `calendar_event_id` are reset to null (live single-use handles). The creator is added as a `JobCollaborator`. Returns 200 with a `JobDetailOut` body (same schema as **GET /api/jobs/{job_id}**). Also (NO schema change): **PATCH /api/jobs/{job_id}/settings** (`JobSettingsIn`) is now invoked by the dashboard "Edit Posting" flow to persist `title` / `custom_job_id` / `tags`.
 - **2026-06-30** — Durable super_admin active-organisation memory via the new internal `users.last_active_org_id` column (`backend/app/routers/auth.py`, `backend/app/utils/auth.py` `get_active_org_id`). **NO request/response schema fields changed** — `last_active_org_id` is internal only and appears in NO `*Out` Pydantic model; only the behavior/prose of four `/api/auth` routes changed. **POST /api/auth/login** no longer clobbers an existing super_admin `active_org_id` selection: the cookie is set only when a target resolves, by precedence (1) the `active_org_id` cookie already on the request, else (2) the user's stored `users.last_active_org_id`, else (3) a deterministic first org `ORDER BY created_at ASC, id ASC` (previously it unconditionally overwrote the cookie with an arbitrary `Organisation.first()` on every login, which made the wrong org reappear). **POST /api/auth/switch-context** now ALSO persists the chosen org to `users.last_active_org_id` (server-side `db.commit()`) so the selection survives cookie loss and future logins. **GET /api/auth/organisations** now returns the list `ORDER BY org_name` (was unordered). **GET /api/auth/me** / the shared `get_active_org_id` helper now resolve the super_admin org via the fallback chain `active_org_id` cookie → `users.last_active_org_id` → the super_admin's own `organisation_id` → deterministic first org (`ORDER BY created_at ASC, id ASC`) (was cookie → arbitrary `.first()`).
@@ -1753,6 +1754,33 @@ Status codes: 200 OK; 404 "Career page not found" (no Organisation has the given
 
 Notes: Plain dict response (no response_model). Resolves the Organisation by `career_subdomain`; `jobs` is filtered to that org AND `is_job_listed == True` AND `status == published` (JobStatus.published). Each job `id` is stringified; `title` falls back to `role_name` when null.
 
+#### POST /api/public/interview-session/{session_id}/screening-outcome
+
+Server-to-server route called by the interview engine (`POST /api/interviews/{sessionId}/screening-outcome`) immediately after a **recruiter-screening** interview has been scored. Reads the already-persisted evaluation off the shared engine `InterviewSession` row (never trusts the caller), records the real screening verdict onto the applicant, and — only when the candidate is a fit — auto-provisions and emails the functional-interview invite via the existing `_provision_invite_for_applicant(stage="functional")` path.
+
+- **Auth:** optional shared-secret header `X-Webhook-Secret`, checked against `settings.WEBHOOK_SECRET` when that setting is non-empty (permissive — no check — when unset, so local dev needs no keys). Same pattern as the existing recording-upload webhook.
+- **Path params:** `session_id`:UUID — the Applicant id / engine InterviewSession id.
+- **Query params:** none
+
+Request: none
+
+Response (fits — invite minted):
+```json
+{ "fits": true, "link": "string", "sent": true }
+```
+Response (fits — already advanced to functional previously; idempotent replay):
+```json
+{ "fits": true, "alreadyAdvanced": true, "link": "string | null" }
+```
+Response (does not fit):
+```json
+{ "fits": false, "fitLabel": "Moderate fit" | "Poor fit" }
+```
+
+Status codes: 200 OK; 403 "Invalid webhook secret." (secret configured and mismatched); 404 "Applicant not found."; 409 "Screening evaluation is not ready yet." (engine session missing or not yet evaluated).
+
+Notes: Maps the engine's `evaluation.recommendation` (`strong_proceed`/`proceed` → `"Good fit"`, `hold`/`needs_human_review` → `"Moderate fit"`, `reject` → `"Poor fit"`) onto `Applicant.recruiter_screening`, mirrors the score onto `recruiter_screening_score` and `screening_score`, and sets `screening_status = InterviewStatus.completed`. These are the exact fields `dashboard/src/dashboard/report-page.js` (`renderScreeningPane`) and `dashboard/src/dashboard/deep-analysis.js` (`screeningBlock` + funnel stage dots) already read, so the real result surfaces there with no dashboard changes. Only a `"Good fit"` mapping triggers `_provision_invite_for_applicant` (mints invite, re-runs `sync_applicant_to_ai`, binds the invite token, emails it) — an applicant who already has `functional_status` set is treated as already-advanced and is never re-provisioned.
+
 ### `backend/app/routers/leaderboard.py`
 
 #### GET /api/leaderboard/jobs/{job_id}
@@ -3280,6 +3308,22 @@ When engine is 'deterministic', `evaluation` is whatever evaluateInterview(sessi
 Status codes: 200 OK (engine 'transcript_llm' or 'deterministic'); 404 Not Found {"error":"Session not found"} (unknown sessionId at the route guard); 500 Internal Server Error {"error":<message|'Report generation failed'>} (both LLM report and deterministic fallback threw).
 
 Notes: Global rate limit. Always calls finalizeTranscript(sessionId) first. Tries generateTranscriptReport (DeepSeek); on any error logs a warning and tries evaluateInterview; only if BOTH fail does it 500. The LLM report path persists the report onto session.evaluation and sets session.status='EVALUATED'.
+
+#### POST /api/interviews/{sessionId}/screening-outcome
+
+Recruiter-screening only: called by the candidate room right after `/report` succeeds. Forwards server-to-server to the FastAPI backend (`POST /api/public/interview-session/{session_id}/screening-outcome`, `X-Webhook-Secret: process.env.ENGINE_WEBHOOK_SECRET`), which reads the evaluation this route's sibling `/report` just persisted, decides fit, and — on a fit — auto-mints + emails the functional-interview invite. This route is a thin relay: it does no DB access itself.
+
+- **Auth:** public (candidate room calls it directly, no token).
+- **Path params:** `sessionId`:string — the interview session id.
+- **Query params:** none
+
+Request: none
+
+Response: relays the backend's JSON body and status code verbatim — see `POST /api/public/interview-session/{session_id}/screening-outcome` above for the shape (`{fits, link?, sent?, alreadyAdvanced?, fitLabel?}`).
+
+Status codes: relayed from the backend (200/403/404/409); 503 `{"error": "Backend not configured for screening outcome routing."}` when `BACKEND_URL` is unset; 502 `{"error": "Failed to reach backend for screening outcome."}` on a network failure reaching the backend.
+
+Notes: Requires `BACKEND_URL` and `ENGINE_WEBHOOK_SECRET` env vars on the engine (same vars already used by `drive-upload.service.ts` for recording uploads). The candidate room only calls this when the session's `InterviewSession.settings.stage === 'screening'` (stamped by `backend/app/utils/ai_sync.py sync_applicant_to_ai`); functional-interview sessions never call it.
 
 #### GET /api/interviews/{sessionId}/transcript/file
 

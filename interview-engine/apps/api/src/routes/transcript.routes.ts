@@ -196,6 +196,30 @@ export async function transcriptRoutes(app: FastifyInstance) {
     return { evaluation, engine: structured ? `${engine}+aviral` : engine };
   });
 
+  // Recruiter-screening only: after `/report` has scored the session, ask the backend
+  // to decide fit (it re-reads the evaluation we just persisted, never trusts the
+  // client) and — on a fit — auto-mint + email the functional-interview invite.
+  // Server-to-server forward, same pattern as drive-upload.service.ts.
+  app.post('/:sessionId/screening-outcome', async (req: any, reply) => {
+    const { sessionId } = req.params;
+    const backendUrl = process.env.BACKEND_URL;
+    if (!backendUrl) {
+      return reply.code(503).send({ error: 'Backend not configured for screening outcome routing.' });
+    }
+
+    try {
+      const res = await fetch(
+        `${backendUrl.replace(/\/$/, '')}/api/public/interview-session/${sessionId}/screening-outcome`,
+        { method: 'POST', headers: { 'X-Webhook-Secret': process.env.ENGINE_WEBHOOK_SECRET ?? '' } },
+      );
+      const data = await res.json().catch(() => ({}));
+      return reply.code(res.status).send(data);
+    } catch (err: any) {
+      req.log?.error?.(err, 'screening-outcome forward failed');
+      return reply.code(502).send({ error: 'Failed to reach backend for screening outcome.' });
+    }
+  });
+
   // Download the finalized .txt (finalizes on demand if missing).
   app.get('/:sessionId/transcript/file', async (req: any, reply) => {
     const { sessionId } = req.params;
