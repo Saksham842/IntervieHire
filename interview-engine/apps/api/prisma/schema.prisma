@@ -124,6 +124,8 @@ model InterviewSession {
   avatarProvider String         @default("ue5_pixel_streaming")
   evaluation     Json?
   reportUrl      String?
+  recordingDriveFileId String?
+  recordingDriveUrl    String?
   inviteToken    String?
   settings       Json           @default("{}")
   createdAt      DateTime       @default(now())

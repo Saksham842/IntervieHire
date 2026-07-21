@@ -1,6 +1,7 @@
 import { document, requestAnimationFrame, setTimeout } from "./runtime";
 import { escapeHTML, sourceLabel } from "./escape";
 import { saveStateToLocalStorage } from "./ai-api";
+import { isApiMode, apiUploadResumes } from "./api";
 import { renderDeepAnalysisPane } from "./deep-analysis";
 import { drawFunnelSVG, drawScoreDistributionSVG } from "./funnel-charts";
 import {
@@ -12,6 +13,7 @@ import { stopActiveCardPlayer, toggleCardPlayer } from "./kanban-dnd";
 import { recalculateJobPipelines, renderKanbanBoard } from "./kanban-swarm";
 import { triggerExcelExport } from "./navigation";
 import { renderBlueprintStudio } from "./blueprint-studio";
+import { renderInterviewAnalysisStage } from "./interview-analysis";
 import { renderTestInterviewPane } from "./test-interview";
 import {
 	filterCandidatesByDateRange,
@@ -1584,7 +1586,7 @@ function bindAddApplicantsPanel(job, paneKey, source, targetStage) {
 		e.preventDefault();
 		dropzone.style.borderColor = "var(--glass-border)";
 		dropzone.style.background = "rgba(255,255,255,0.02)";
-		const files = Array.from(e.dataTransfer.files).filter((f) =>
+		const files = Array.from(e.dataTransfer.files).filter((f: File) =>
 			/\.(pdf|docx?|txt|zip)$/i.test(f.name),
 		);
 		if (files.length > 0) enqueueFiles(files);
@@ -1707,4 +1709,51 @@ function bindAddApplicantsPanel(job, paneKey, source, targetStage) {
 
 		countSpan.textContent = uploadedFiles.length;
 	}
+}
+
+// ── Subtabs helpers ───────────────────────────────────────────────────────────
+
+function getCandidateSubtab(c) {
+	if (c.interviewStatus === 'Completed') return 'completed';
+	if (c.interviewStatus === 'Incomplete') return 'partially-completed';
+	if (c.interviewStatus === 'Slot Missed') return 'window-missed';
+	return 'scheduled';
+}
+
+function getOrInitActiveSubtab(stage, candidates) {
+	const appStateKey = stage === 'screening' ? 'activeScreeningSubtab' : 'activeFunctionalSubtab';
+	const fromAppState = AppState[appStateKey];
+	if (fromAppState && ['window-missed', 'scheduled', 'partially-completed', 'completed'].includes(fromAppState)) {
+		return fromAppState;
+	}
+	const key = `ih-subtab-${stage}`;
+	const saved = localStorage.getItem(key);
+	if (saved && ['window-missed', 'scheduled', 'partially-completed', 'completed'].includes(saved)) {
+		return saved;
+	}
+	const order = ['scheduled', 'completed', 'partially-completed', 'window-missed'];
+	for (const tab of order) {
+		if (candidates.some((c) => getCandidateSubtab(c) === tab)) return tab;
+	}
+	return 'scheduled';
+}
+
+function buildSubtabsBarHTML(stage, counts, activeSubtab) {
+	const labels = {
+		'window-missed': 'Window Missed',
+		scheduled: 'Scheduled',
+		'partially-completed': 'Partially Completed',
+		completed: 'Completed',
+	};
+	const keys = ['window-missed', 'scheduled', 'partially-completed', 'completed'];
+	return `
+    <div class="stage-subtabs" data-stage="${stage}">
+      ${keys.map((k) => `
+        <button class="stage-subtab-btn ${activeSubtab === k ? 'active' : ''}" data-stage="${stage}" data-subtab="${k}">
+          ${labels[k]}
+          <span class="stage-subtab-count">${counts[k] || 0}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
 }

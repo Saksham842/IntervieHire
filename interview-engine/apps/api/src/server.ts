@@ -15,10 +15,15 @@ import { registerWebsocket } from './websocket/gateway.js';
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(serverDirectory, '../../../.env') });
 
-const app = Fastify({ logger: true });
+// Fastify's default bodyLimit (1 MiB) is fine for JSON, but far too small for a
+// full interview recording upload (video + audio, tens to hundreds of MB) — the
+// multipart plugin falls back to this same limit unless given its own.
+const RECORDING_UPLOAD_LIMIT_BYTES = 500 * 1024 * 1024;
+
+const app = Fastify({ logger: true, bodyLimit: RECORDING_UPLOAD_LIMIT_BYTES });
 await app.register(cors, { origin: true, credentials: true });
 await app.register(rateLimit, { max: 200, timeWindow: '1 minute' });
-await app.register(multipart);
+await app.register(multipart, { limits: { fileSize: RECORDING_UPLOAD_LIMIT_BYTES } });
 await app.register(websocket);
 app.get('/health', async () => ({ ok: true, service: 'interviehire-api' }));
 await app.register(companyRoutes, { prefix: '/api/company' });

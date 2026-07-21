@@ -187,7 +187,7 @@ function makeViolationRecordingId(prefix = 'violation-recording') {
 }
 
 /** Pick the best-supported MediaRecorder container/codec (VP9→VP8→webm→mp4), or '' if none. */
-function getBestViolationRecordingMimeType() {
+export function getBestViolationRecordingMimeType() {
   if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) {
     return '';
   }
@@ -542,6 +542,11 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
   // interviewer's voice is captured from the existing share — no second prompt.
   const getScreenAudioStream = useCallback(() => screenAudioStreamRef.current, []);
 
+  // Returns the video-only MediaStream from the same screen share (shows Lina + whatever
+  // the candidate shared). Consumed by the full-interview recorder so it doesn't need a
+  // second getDisplayMedia prompt.
+  const getScreenVideoStream = useCallback(() => screenStreamRef.current, []);
+
   return {
     hasScreenSharePermission,
     isRecordingViolation,
@@ -549,6 +554,7 @@ function useViolationScreenRecorder(options: UseViolationScreenRecorderOptions =
     requestScreenShare,
     stopScreenShare,
     getScreenAudioStream,
+    getScreenVideoStream,
     startViolationRecording,
     stopViolationRecording,
     recordViolationClip,
@@ -3560,6 +3566,7 @@ export function useProctoring(sessionId: string, socket?: WebSocket | null, cali
     requestScreenShare: violationScreenRecorder.requestScreenShare,
     stopScreenShare: violationScreenRecorder.stopScreenShare,
     getScreenAudioStream: violationScreenRecorder.getScreenAudioStream,
+    getScreenVideoStream: violationScreenRecorder.getScreenVideoStream,
     hasScreenSharePermission: violationScreenRecorder.hasScreenSharePermission,
     isRecordingViolation: violationScreenRecorder.isRecordingViolation,
     screenShareError: violationScreenRecorder.screenShareError,

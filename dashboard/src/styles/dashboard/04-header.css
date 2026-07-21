@@ -182,7 +182,7 @@ body.light-theme .theme-icon-sun { display: block; }
 /* ============================================================
    VIEWS CONTAINER
    ============================================================ */
-.dashboard-view-body { padding: 24px 28px; flex-grow: 1; min-width: 0; overflow-x: hidden; }
+.dashboard-view-body { padding: 24px 28px; flex-grow: 1; min-width: 0; overflow-x: auto; }
 .dashboard-view { display: none; }
 .dashboard-view.active-view {
   display: block;

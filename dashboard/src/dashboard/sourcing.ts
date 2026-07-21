@@ -674,8 +674,10 @@ async function importCsvCandidates() {
   const sourceMap = { screening: 'scheduled', functional: 'functional', resume: 'bulk_upload' };
   const apiSource = sourceMap[currentTargetStage] || 'bulk_upload';
 
+  const localIds = [];
   csvParsedCandidates.forEach(cand => {
-    addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob, null, currentTargetStage);
+    const candId = addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob, null, currentTargetStage);
+    if (candId) localIds.push(candId);
   });
 
 
@@ -885,6 +887,8 @@ async function importResumesCandidates() {
     const candId = addCandidateToAppState(name, email, phone, activeJob, file.textContent, currentTargetStage);
     importedCandIds.push(candId);
   });
+
+  const localIds = [...importedCandIds];
 
   soundEngine.playChime([392.00, 523.25, 659.25], 0.2, 0.08);
   showPremiumToast(`Imported ${uploadedFiles.length} candidate(s) — running AI analysis...`, 'success');
@@ -1151,8 +1155,10 @@ async function importManualQueue() {
   const sourceMap = { screening: 'scheduled', functional: 'functional', resume: 'bulk_upload' };
   const apiSource = sourceMap[currentTargetStage] || 'bulk_upload';
 
+  const localIds = [];
   sourcingQueue.forEach(cand => {
-    addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob, null, currentTargetStage);
+    const candId = addCandidateToAppState(cand.name, cand.email, cand.phone, activeJob, null, currentTargetStage);
+    if (candId) localIds.push(candId);
   });
 
 
@@ -1195,7 +1201,7 @@ async function importManualQueue() {
 }
 
 // === Shared Candidate Insertion helper ===
-function addCandidateToAppState(name, email, phone, job, resumeText?) {
+function addCandidateToAppState(name, email, phone, job, resumeText?, targetStage?) {
   const identity = extractResumeIdentity(resumeText, name);
   const candidateName = identity.name || normalizeCandidateName(name) || name;
   const candidateEmail = identity.email || email || createPlaceholderEmail(candidateName);

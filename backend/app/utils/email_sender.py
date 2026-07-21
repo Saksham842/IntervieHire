@@ -23,10 +23,12 @@ def send_email_via_resend(to_email: str, subject: str, html_content: str, attach
     if not settings.RESEND_API_KEY:
         raise RuntimeError("Resend API Key is not configured.")
 
+    # Resend can only send "from" an address on a domain verified in the Resend
+    # dashboard; anything else (incl. an unverified custom domain, or a personal
+    # gmail.com address) is rejected with a 403 validation_error at send time.
+    # Fall back to Resend's always-verified sandbox address when SMTP_FROM isn't
+    # configured to a real, verified sender.
     from_email = settings.SMTP_FROM or "onboarding@resend.dev"
-    if not settings.SMTP_FROM or "interviehire.com" in settings.SMTP_FROM or "example.com" in settings.SMTP_FROM:
-        if settings.SMTP_FROM == "hr@interviehire.com":
-            from_email = "onboarding@resend.dev"
 
     headers = {
         "Authorization": f"Bearer {settings.RESEND_API_KEY}",

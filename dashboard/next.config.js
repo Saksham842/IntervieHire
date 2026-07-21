@@ -32,11 +32,7 @@ const nextConfig = {
   // with explicit `.js` extensions (e.g. `from './escape.js'`). As we rename files
   // to `.ts`, those specifiers must keep resolving without touching all 200+ import
   // lines. extensionAlias maps a `.js` request to `.ts`/`.tsx` first, falling back
-  // to the real `.js`/`.jsx` for not-yet-converted modules. Configured for BOTH
-  // bundlers so `next dev` (Turbopack) and `next build` (webpack) behave the same.
-  turbopack: {
-    resolveExtensions: ['.ts', '.tsx', '.js', '.jsx', '.json', '.mjs'],
-  },
+  // to the real `.js`/`.jsx` for not-yet-converted modules.
   webpack: (config) => {
     config.resolve.extensionAlias = {
       ...(config.resolve.extensionAlias || {}),

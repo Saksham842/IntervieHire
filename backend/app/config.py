@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     GOOGLE_REFRESH_TOKEN: str | None = None
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/public/oauth2callback"
     ORGANIZER_CALENDAR_ID: str = "primary"
+    GOOGLE_DRIVE_FOLDER_NAME: str = "Recordings"
     WEBHOOK_SECRET: str = "super-secret-webhook-key"
 
     # API Keys

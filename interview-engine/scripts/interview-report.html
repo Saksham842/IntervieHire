@@ -1,0 +1,268 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  :root { --glass-bg: rgba(255,255,255,0.04); --glass-border: rgba(255,255,255,0.10);
+    --color-text-primary:#e8eaf0; --color-text-muted:#9aa0b4; --color-text-faint:#6b7280; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:26px 30px; font-family:'Segoe UI',system-ui,sans-serif;
+    background:#0c0e16; color:#e8eaf0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .rp-shell { display:flex; flex-direction:column; gap:16px; max-width:920px; margin:0 auto; }
+  .rp-topbar { display:flex; align-items:center; gap:16px; padding:16px 20px; border-radius:16px;
+    background:var(--glass-bg); border:1px solid var(--glass-border); }
+  .rp-avatar { width:50px; height:50px; border-radius:14px; display:flex; align-items:center; justify-content:center;
+    font-weight:700; color:#fff; background:linear-gradient(135deg,#6366f1,#8b5cf6); box-shadow:0 6px 18px rgba(99,102,241,.35); }
+  .rp-identity { flex:1; min-width:0; }
+  .rp-name { margin:0; font-size:1.2rem; font-weight:700; display:flex; align-items:center; gap:10px; }
+  .rp-score-inline { font-size:.74rem; font-weight:700; padding:3px 10px; border-radius:999px; }
+  .rp-score-inline.high{background:rgba(16,185,129,.14);color:#10b981;} .rp-score-inline.medium{background:rgba(245,158,11,.14);color:#f59e0b;}
+  .rp-score-inline.low{background:rgba(244,63,94,.14);color:#f43f5e;}
+  .rp-contact { margin:4px 0 0; font-size:.78rem; color:var(--color-text-muted); }
+  .rp-logo { font-size:.72rem; font-weight:800; letter-spacing:.04em;
+    background:linear-gradient(90deg,#6366f1,#a855f7); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .rp-card { padding:20px; border-radius:16px; background:var(--glass-bg); border:1px solid var(--glass-border); }
+  .rp-card-title { margin:0 0 14px; font-size:.95rem; font-weight:700; display:flex; align-items:center; gap:9px; }
+  .rp-card-title.gradient { background:linear-gradient(90deg,#6366f1,#a855f7); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .rp-gold .rp-card-title { background:linear-gradient(90deg,#d4af37,#ffc72c); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .rp-overview-grid { display:grid; grid-template-columns:1.7fr 1fr; gap:16px; align-items:start; }
+  .rp-score-card { padding:20px; border-radius:16px; text-align:center;
+    background:linear-gradient(160deg,rgba(99,102,241,.12),rgba(168,85,247,.06)); border:1px solid rgba(99,102,241,.25); }
+  .rp-score-card-head { font-size:.8rem; font-weight:700; margin-bottom:8px; }
+  .rp-ring-wrap { position:relative; width:150px; margin:0 auto; }
+  .rp-ring-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .rp-ring-center strong { font-size:2.1rem; font-weight:800; }
+  .rp-ring-center span { font-size:.72rem; color:var(--color-text-muted); }
+  .rp-rec-strip { display:inline-flex; align-items:center; gap:8px; margin-top:12px; padding:8px 18px; border-radius:999px; font-size:.82rem; font-weight:800; }
+  .rp-rec-strip.high{background:rgba(16,185,129,.14);color:#10b981;border:1px solid rgba(16,185,129,.3);}
+  .rp-rec-strip.medium{background:rgba(245,158,11,.14);color:#f59e0b;border:1px solid rgba(245,158,11,.3);}
+  .rp-rec-strip.low{background:rgba(244,63,94,.14);color:#f43f5e;border:1px solid rgba(244,63,94,.3);}
+  .rp-summary { font-size:.86rem; line-height:1.6; color:#cfd3e0; margin:0; }
+  .rp-score-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; }
+  .rp-score-cell { background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08); border-radius:11px; padding:12px 14px; display:flex; flex-direction:column; gap:3px; }
+  .rp-score-cell span { font-size:11px; color:var(--color-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+  .rp-score-cell strong { font-size:24px; font-weight:800; }
+  .rp-score-cell.big { grid-column:span 2; } .rp-score-cell.big strong { font-size:34px; }
+  .rp-score-cell.high strong{color:#34d399;} .rp-score-cell.medium strong{color:#fbbf24;} .rp-score-cell.low strong{color:#f87171;}
+  .rp-score-cell .neg { color:#f87171; }
+  .rp-formula { margin-top:12px; font-size:11.5px; font-style:italic; color:var(--color-text-muted); }
+  .rp-dim { margin-bottom:11px; }
+  .rp-dim-head { display:flex; justify-content:space-between; font-size:12.5px; }
+  .rp-dim-head strong.high{color:#34d399;} .rp-dim-head strong.medium{color:#fbbf24;} .rp-dim-head strong.low{color:#f87171;}
+  .rp-dim-track { height:6px; border-radius:5px; background:rgba(255,255,255,.08); overflow:hidden; margin-top:4px; }
+  .rp-dim-fill { display:block; height:100%; border-radius:5px; }
+  .rp-dim-fill.high{background:linear-gradient(90deg,#10b981,#34d399);} .rp-dim-fill.medium{background:linear-gradient(90deg,#d4af37,#fbbf24);} .rp-dim-fill.low{background:linear-gradient(90deg,#ef4444,#f87171);}
+  .rp-q-block { border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:13px 15px; margin-top:11px; background:rgba(255,255,255,.02); break-inside:avoid; }
+  .rp-q-head { display:flex; align-items:center; gap:10px; }
+  .rp-q-num { font-size:11px; font-weight:800; color:#1a1205; background:linear-gradient(135deg,#d4af37,#ffc72c); border-radius:6px; padding:3px 8px; }
+  .rp-q-text { flex:1; font-weight:600; font-size:13px; }
+  .rp-q-score { font-size:18px; font-weight:800; }
+  .rp-q-score.high{color:#34d399;} .rp-q-score.medium{color:#fbbf24;} .rp-q-score.low{color:#f87171;}
+  .rp-cov { font-size:12px; margin:7px 0 0; } .rp-cov.miss{color:#f87171;}
+  .rp-q-sub { display:flex; gap:7px; flex-wrap:wrap; margin:8px 0 0; }
+  .rp-pill-mini { font-size:10.5px; font-weight:700; border-radius:999px; padding:2px 9px; background:rgba(212,175,55,.14); color:#d4af37; }
+  .rp-pill-mini.bad { background:rgba(248,113,113,.16); color:#f87171; }
+  .rp-proc-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:6px; }
+  .rp-proc-stat { display:flex; flex-direction:column; gap:3px; padding:14px 16px; border-radius:13px; border:1px solid var(--glass-border); }
+  .rp-proc-stat span { font-size:11px; color:var(--color-text-muted); }
+  .rp-proc-stat strong { font-size:1.3rem; font-weight:800; }
+  .rp-proc-stat.missed { background:rgba(244,63,94,.07); border-color:rgba(244,63,94,.3); } .rp-proc-stat.missed strong{color:#f43f5e;}
+  .rp-proc-stat.info { background:rgba(14,165,233,.07); border-color:rgba(14,165,233,.3); } .rp-proc-stat.info strong{color:#0ea5e9;}
+  .rp-proc-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 0; border-bottom:1px solid var(--glass-border); }
+  .rp-proc-row:last-child { border-bottom:none; }
+  .rp-proc-row strong { font-size:.82rem; display:block; } .rp-proc-row p { margin:3px 0 0; font-size:.72rem; color:var(--color-text-muted); }
+  .rp-proc-count { font-size:.74rem; font-weight:800; padding:3px 10px; border-radius:999px; }
+  .rp-proc-count.bad { color:#f43f5e; background:rgba(244,63,94,.12); border:1px solid rgba(244,63,94,.3); }
+  .rp-two { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .rp-bullets { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:7px; }
+  .rp-bullets li { font-size:.82rem; line-height:1.55; } .rp-bullets li::marker { color:#6366f1; }
+  .rp-bullets .rp-none { color:var(--color-text-muted); list-style:none; margin-left:-18px; }
+  .rp-foot { text-align:center; font-size:.68rem; color:var(--color-text-muted); margin-top:4px; }
+  .rp-card, .rp-overview-grid, .rp-two { break-inside:avoid; }
+</style></head><body>
+<div class="rp-shell">
+
+  <div class="rp-topbar">
+    <div class="rp-avatar">AD</div>
+    <div class="rp-identity">
+      <h1 class="rp-name">Aviral Deshratna Saxena <span class="rp-score-inline low">0/100</span></h1>
+      <p class="rp-contact">Head of Talent Management / HR Strategy Leader &middot; Hyundai Motor India Limited &middot; Session cmqlizi78004nsvpkgr7kjiop</p>
+    </div>
+    <div class="rp-logo">INTERVIEHIRE &middot; DEEP ANALYSIS</div>
+  </div>
+
+  <div class="rp-overview-grid">
+    <div class="rp-card">
+      <h2 class="rp-card-title gradient">Executive Summary</h2>
+      <p class="rp-summary">The candidate demonstrated a lack of preparedness and engagement throughout the interview, failing to answer the majority of questions. Proctoring violations, particularly the use of a mobile phone during the interview, raise significant concerns about their focus and professionalism. Given these factors, the candidate is not suitable for the Head of Talent Management / HR Strategy Leader position.</p>
+    </div>
+    <div class="rp-score-card">
+      <div class="rp-score-card-head">Overall Score</div>
+      <div class="rp-ring-wrap">
+        <svg width="150" height="150" viewBox="0 0 120 120">
+          <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(120,130,160,.18)" stroke-width="10"/>
+          <circle cx="60" cy="60" r="52" fill="none" stroke="#f43f5e"
+            stroke-width="10" stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"
+            transform="rotate(-90 60 60)"/>
+        </svg>
+        <div class="rp-ring-center"><strong>0</strong><span>out of 100</span></div>
+      </div>
+      <div class="rp-rec-strip low">REJECT &middot; high confidence</div>
+    </div>
+  </div>
+
+  <div class="rp-card rp-gold">
+    <h2 class="rp-card-title">Interview Analysis &middot; Score Breakdown</h2>
+    <div class="rp-score-grid">
+      <div class="rp-score-cell big low"><span>Final Score</span><strong>0</strong><em>REJECT</em></div>
+      <div class="rp-score-cell low"><span>Content Score</span><strong>10</strong></div>
+      <div class="rp-score-cell"><span>Proctoring Penalty</span><strong class="neg">&minus;30</strong></div>
+      <div class="rp-score-cell high"><span>Comm. Confidence</span><strong>95</strong></div>
+    </div>
+    <p class="rp-formula">finalScore = contentScore (10) &minus; proctoringPenalty (30) = 0. Penalty: 1&times;CRITICAL(20) + 1&times;HIGH(10), capped at 40.</p>
+  </div>
+
+  <div class="rp-card">
+    <h2 class="rp-card-title gradient">Competency Scores</h2>
+    <div class="rp-dim">
+    <div class="rp-dim-head"><span>Talent Management</span><strong class="low">0</strong></div>
+    <div class="rp-dim-track"><span class="rp-dim-fill low" style="width:0%"></span></div>
+  </div><div class="rp-dim">
+    <div class="rp-dim-head"><span>HR Strategy</span><strong class="low">0</strong></div>
+    <div class="rp-dim-track"><span class="rp-dim-fill low" style="width:0%"></span></div>
+  </div><div class="rp-dim">
+    <div class="rp-dim-head"><span>Stakeholder Management</span><strong class="low">0</strong></div>
+    <div class="rp-dim-track"><span class="rp-dim-fill low" style="width:0%"></span></div>
+  </div><div class="rp-dim">
+    <div class="rp-dim-head"><span>Performance Management Systems</span><strong class="low">0</strong></div>
+    <div class="rp-dim-track"><span class="rp-dim-fill low" style="width:0%"></span></div>
+  </div><div class="rp-dim">
+    <div class="rp-dim-head"><span>HR Technology</span><strong class="low">0</strong></div>
+    <div class="rp-dim-track"><span class="rp-dim-fill low" style="width:0%"></span></div>
+  </div>
+  </div>
+
+  <div class="rp-card rp-gold">
+    <h2 class="rp-card-title">Per-Question Breakdown</h2>
+    <div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q1</span>
+      <span class="rp-q-text">What is the primary purpose of adding a distributed cache to a service that needs to scale?</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate did not answer the question.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate was distracted and did not provide a response.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q2</span>
+      <span class="rp-q-text">How do you keep data consistent across services when something fails mid-write?</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate was distracted by their phone and did not answer.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate was not focused on the question.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q3</span>
+      <span class="rp-q-text">Tell me about a tricky bug you tracked down. How did you isolate the root cause?</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate requested to skip the question.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate showed unwillingness to engage with the question.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q4</span>
+      <span class="rp-q-text">How do you make sure your code is reliable before it ships?</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate passed on the question.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate did not provide any insights or answers.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q5</span>
+      <span class="rp-q-text">Describe a time you disagreed with a teammate on a technical decision. What happened?</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate preferred not to answer.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate avoided discussing relevant experiences.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q6</span>
+      <span class="rp-q-text">Tell me about your hands-on experience with Total experience 12-15 years. Walk me through a concrete example and your specific role in it.</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate could not provide an example.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate lacked relevant experience or preparation.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q7</span>
+      <span class="rp-q-text">Tell me about your hands-on experience with MBA in HR from Tier 1 or Tier 2 B-School. Walk me through a concrete example and your specific role in it.</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate was unsure of what to say.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate did not demonstrate knowledge of their educational background.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q8</span>
+      <span class="rp-q-text">Tell me about your hands-on experience with Talent Management &amp; Succession Planning. Walk me through a concrete example and your specific role in it.</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate passed on the question.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate did not provide any relevant examples.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q9</span>
+      <span class="rp-q-text">Tell me about your hands-on experience with Stakeholder Management &amp; Influencing Skills. Walk me through a concrete example and your specific role in it.</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate requested to move on without answering.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate avoided discussing important skills.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q10</span>
+      <span class="rp-q-text">Tell me about your hands-on experience with Performance Management Systems (PMS) Expertise. Walk me through a concrete example and your specific role in it.</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate could not recall any relevant experience.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate showed a lack of knowledge in a key area.</span></div>
+  </div><div class="rp-q-block">
+    <div class="rp-q-head">
+      <span class="rp-q-num">Q11</span>
+      <span class="rp-q-text">Tell me about your hands-on experience with HR Technology (SuccessFactors) &amp; Analytics. Walk me through a concrete example and your specific role in it.</span>
+      <span class="rp-q-score low">0</span>
+    </div>
+    <p class="rp-cov miss">Candidate did not have an answer.</p>
+    <div class="rp-q-sub"><span class="rp-pill-mini bad">Candidate lacked familiarity with essential HR technology.</span></div>
+  </div>
+  </div>
+
+  <div class="rp-card">
+    <h2 class="rp-card-title gradient">Proctoring &amp; Red Flags</h2>
+    <div class="rp-proc-stats">
+      <div class="rp-proc-stat missed"><span>Total Violations</span><strong>2</strong></div>
+      <div class="rp-proc-stat missed"><span>Critical / High</span><strong>2</strong></div>
+      <div class="rp-proc-stat info"><span>Penalty Applied</span><strong>&minus;30</strong></div>
+    </div>
+    <div class="rp-proc-row">
+  <div><strong>PHONE_DETECTED</strong><p>Mobile phone visible in frame and held up to face during questioning.</p></div>
+  <span class="rp-proc-count bad">CRITICAL</span>
+</div><div class="rp-proc-row">
+  <div><strong>GAZE_OFF_SCREEN</strong><p>Candidate repeatedly looking down/away from screen while using phone.</p></div>
+  <span class="rp-proc-count bad">HIGH</span>
+</div>
+  </div>
+
+  <div class="rp-two">
+    <div class="rp-card">
+      <h2 class="rp-card-title gradient">Strengths</h2>
+      <ul class="rp-bullets"><li class="rp-none">None identified.</li></ul>
+    </div>
+    <div class="rp-card">
+      <h2 class="rp-card-title gradient">Weaknesses</h2>
+      <ul class="rp-bullets"><li>Inability to answer key questions related to experience and skills.</li><li>Frequent use of a mobile phone during the interview.</li><li>Lack of engagement and focus on the interview process.</li></ul>
+    </div>
+  </div>
+
+  <div class="rp-card">
+    <h2 class="rp-card-title gradient">Suggested Next Steps</h2>
+    <ul class="rp-bullets"><li>Consider candidates with demonstrated experience and engagement.</li><li>Review candidates who have a strong understanding of HR strategy and talent management.</li><li>Ensure candidates are prepared and focused during interviews.</li></ul>
+  </div>
+
+  <p class="rp-foot">Generated by IntervieHire &middot; LLM evaluation via OpenRouter (openai/gpt-4o-mini) &middot; reportEngine: transcript_llm &middot; cmqlizi78004nsvpkgr7kjiop</p>
+</div>
+</body></html>

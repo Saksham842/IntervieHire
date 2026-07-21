@@ -132,6 +132,10 @@ class InterviewSession(Base):
     avatarProvider = Column(String, default="ue5_pixel_streaming", nullable=False)
     evaluation = Column(JSONB, nullable=True)
     reportUrl = Column(String, nullable=True)
+    # Where the full-interview recording landed after the engine forwarded it to this
+    # backend's Drive-upload webhook (see routers/public.py upload_interview_recording).
+    recordingDriveFileId = Column(String, nullable=True)
+    recordingDriveUrl = Column(String, nullable=True)
     # Per-candidate invite token (shared with the engine). When set, the engine
     # requires a matching token to fetch the session + register on the WS, so only
     # the invited candidate can enter. Null = open (legacy/scheduled/demo path).

@@ -432,7 +432,7 @@ function getStructuredReport(report) {
   return null;
 }
 
-async function downloadInterviewTranscript(candidateId, name) {
+export async function downloadInterviewTranscript(candidateId, name) {
   try {
     const res = await fetch(`${API_BASE}/jobs/applicants/${candidateId}/transcript-download`, { credentials: 'include' });
     if (!res.ok) { soundEngine.playClick(); alert('Transcript not available yet for this candidate.'); return; }

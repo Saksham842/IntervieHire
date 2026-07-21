@@ -285,12 +285,14 @@ function deriveStageStates(c: Candidate): { resume: string; screening: string; f
   let screening = 'idle';
   let functional = 'idle';
 
-  // RESUME — green once cleared/advanced past; red only on a real resume-stage rejection
-  // (recruiter rejected AND never advanced further); yellow while it still sits at resume
-  // awaiting a decision. resume_shortlisted DEFAULTS to false in the DB, so false = "not yet
-  // advanced", NOT "rejected" — it may only ever turn the chip green, never red.
+  // RESUME — green ONLY once the candidate has actually advanced past resume into a later
+  // stage (reachedScreening); red on a real resume-stage rejection (recruiter rejected AND
+  // never advanced further); yellow while it still sits at resume awaiting a decision.
+  // resume_shortlisted is just the AI's "Advance" RECOMMENDATION
+  // (result.recommendation === 'Advance' — see resume-analysis.ts), NOT an actual advance,
+  // so it must not turn the chip green on its own or every AI-recommended candidate falsely
+  // reads "passed resume" while still parked at the resume stage.
   if (reachedScreening) resume = 'pass';
-  else if (c.resumeShortlisted === true) resume = 'pass';
   else if (overallRejected) resume = 'reject';
   else resume = 'active';
 
@@ -316,8 +318,18 @@ function deriveStageStates(c: Candidate): { resume: string; screening: string; f
 // functional), so the roster includes anyone with at least one result — not just
 // candidates who finished the interview (which left the tab empty pre-interview).
 function rosterCandidates(job: Job): Candidate[] {
+  // Scope to THIS job the same way every other view does: in api mode a candidate
+  // belongs to the job only when its backend jobId matches. Matching on the role
+  // NAME alone (the old behaviour) also swept in same-named rows from other jobs and
+  // the local demo seed, so the roster showed phantom + duplicated candidates.
+  const apiLive = isApiMode() && !!job._backend;
   return filterCandidatesByDateRange(AppState.candidates)
-    .filter((c: Candidate) => (c.jobApplied === job.roleName || c.jobApplied === job.cardName) && (hasResume(c) || hasScreening(c) || hasFunctional(c)));
+    .filter((c: Candidate) => {
+      const belongsToJob = apiLive
+        ? c.jobId === job.id
+        : c.jobApplied === job.roleName || c.jobApplied === job.cardName;
+      return belongsToJob && (hasResume(c) || hasScreening(c) || hasFunctional(c));
+    });
 }
 
 // One headline number per candidate: functional score if interviewed, else resume

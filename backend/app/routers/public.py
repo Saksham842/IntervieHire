@@ -1,10 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Header, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
+import json
 import logging
+import os
+import shutil
+import tempfile
 
 from app.database import get_db
 from app.models.applicant import Applicant, InterviewStatus
@@ -13,6 +17,7 @@ from app.models.user import User
 from app.models.organisation import Organisation
 from app.config import settings
 from app.utils.google_calendar import create_calendar_event, update_calendar_event
+from app.utils.google_drive import upload_recording
 from app.utils.email_sender import send_ical_invitation_email
 from app.routers.invites import _rate_limit
 
@@ -36,7 +41,8 @@ def oauth_connect(user_id: str):
                 "token_uri": "https://oauth2.googleapis.com/token",
             }
         },
-        scopes=["https://www.googleapis.com/auth/calendar"]
+        scopes=["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/drive.file"],
+        autogenerate_code_verifier=False,
     )
     flow.redirect_uri = settings.GOOGLE_REDIRECT_URI
     authorization_url, state = flow.authorization_url(
@@ -61,7 +67,8 @@ def oauth2callback(code: str, state: str, db: Session = Depends(get_db)):
                 "token_uri": "https://oauth2.googleapis.com/token",
             }
         },
-        scopes=["https://www.googleapis.com/auth/calendar"]
+        scopes=["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/drive.file"],
+        autogenerate_code_verifier=False,
     )
     flow.redirect_uri = settings.GOOGLE_REDIRECT_URI
     flow.fetch_token(code=code)
@@ -443,4 +450,133 @@ def public_careers(subdomain: str, db: Session = Depends(get_db)):
             for j in jobs
         ],
     }
+
+
+@router.post("/interview-session/{session_id}/recording")
+def upload_interview_recording(
+    session_id: str,
+    file: UploadFile = File(...),
+    x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    db: Session = Depends(get_db),
+):
+    # Server-to-server call from the engine only (carries large binary uploads, no
+    # candidate-facing auth otherwise) — gate it with the shared webhook secret.
+    if settings.WEBHOOK_SECRET and x_webhook_secret != settings.WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret.")
+
+    # A real scheduled interview's session id IS the applicant's UUID (see
+    # ai_sync.sync_applicant_to_ai); demo/test-room sessions use the engine's
+    # default Prisma CUID instead, which has no matching Applicant row.
+    applicant = None
+    try:
+        applicant_uuid = UUID(session_id)
+        applicant = db.query(Applicant).filter(Applicant.id == applicant_uuid).first()
+    except ValueError:
+        pass
+    job = db.query(Job).filter(Job.id == applicant.job_id).first() if applicant else None
+    job_title = (job.role_name or job.title) if job else "Interview"
+    candidate_name = applicant.name if applicant else str(session_id)
+    filename = f"{candidate_name} - {job_title} - {session_id}.webm"
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+    try:
+        shutil.copyfileobj(file.file, tmp)
+        tmp.close()
+        result = upload_recording(
+            tmp.name,
+            filename,
+            mime_type=file.content_type or "video/webm",
+            recruiter_id=job.created_by_id if job else None,
+            db=db,
+        )
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    if not result:
+        return {"ok": False, "simulated": True}
+    return {"ok": True, "driveFileId": result["id"], "driveUrl": result["webViewLink"]}
+
+
+# Maps the engine's aviral-eval recommendation onto the fit vocabulary the dashboard
+# already renders (`report-page.js` renderScreeningPane, `deep-analysis.js` screeningBlock
+# + funnel dots all key off exactly these three strings).
+_RECOMMENDATION_TO_FIT_LABEL = {
+    "strong_proceed": "Good fit",
+    "proceed": "Good fit",
+    "hold": "Moderate fit",
+    "needs_human_review": "Moderate fit",
+    "reject": "Poor fit",
+}
+
+
+@router.post("/interview-session/{session_id}/screening-outcome")
+def screening_outcome(
+    session_id: UUID,
+    x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    db: Session = Depends(get_db),
+):
+    """Called (server-to-server, from the engine) right after a recruiter-screening
+    interview is scored. Reads the ALREADY-PERSISTED evaluation off the shared engine
+    session (never trusts anything the browser claims), records the real screening
+    verdict onto the applicant, and — only on a fit — auto-provisions + emails the
+    functional-interview invite via the existing, unmodified invite flow."""
+    if settings.WEBHOOK_SECRET and x_webhook_secret != settings.WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret.")
+
+    applicant = db.query(Applicant).filter(Applicant.id == session_id).first()
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Applicant not found.")
+
+    # Idempotent replay: this applicant already advanced to functional (either via this
+    # same call earlier, or a recruiter manually moved them) — never re-provision, which
+    # would reset an in-progress/completed functional session. Hand back the existing link.
+    if applicant.functional_status is not None:
+        from app.models.interview_invite import InterviewInvite
+        from app.routers.invites import build_invite_link
+
+        invite = (
+            db.query(InterviewInvite)
+            .filter(InterviewInvite.applicant_id == applicant.id, InterviewInvite.stage == "functional")
+            .order_by(InterviewInvite.created_at.desc())
+            .first()
+        )
+        return {
+            "fits": True,
+            "alreadyAdvanced": True,
+            "link": build_invite_link(invite.token) if invite else None,
+        }
+
+    from app.models.ai_integration import InterviewSession as EngineSession
+
+    engine_session = db.query(EngineSession).filter(EngineSession.id == str(session_id)).first()
+    if not engine_session or not engine_session.evaluation:
+        raise HTTPException(status_code=409, detail="Screening evaluation is not ready yet.")
+
+    evaluation = engine_session.evaluation or {}
+    recommendation = evaluation.get("recommendation")
+    overall_score = evaluation.get("overallScore")
+    fit_label = _RECOMMENDATION_TO_FIT_LABEL.get(recommendation, "Moderate fit")
+
+    applicant.screening_status = InterviewStatus.completed
+    if overall_score is not None:
+        try:
+            applicant.screening_score = float(overall_score)
+        except (TypeError, ValueError):
+            pass
+    applicant.recruiter_screening = fit_label
+    applicant.recruiter_screening_score = applicant.screening_score
+    if not applicant.attempted_at:
+        applicant.attempted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    if fit_label != "Good fit":
+        return {"fits": False, "fitLabel": fit_label}
+
+    from app.routers.invites import _provision_invite_for_applicant
+
+    result = _provision_invite_for_applicant(db, applicant, stage="functional", send=True)
+    return {"fits": True, "link": result["link"], "sent": result["sent"]}
 

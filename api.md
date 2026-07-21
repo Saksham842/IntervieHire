@@ -6,6 +6,8 @@
 
 > Append-only, newest first. A new entry is **prepended** here whenever a route is added, modified, refactored, or removed. Never rewrite history.
 
+- **2026-07-20** — Recruiter screening is now a distinct AI-avatar interview stage instead of just "the same room with different questions". `backend/app/utils/ai_sync.py` (`sync_applicant_to_ai`) now stamps `interview_settings['stage'] = 'screening' | 'functional'` into `InterviewSession.settings` (no schema change — reuses the existing free-form JSON column) so the candidate room can tell the two apart. Added **POST /api/public/interview-session/{session_id}/screening-outcome** (`backend/app/routers/public.py`, webhook-secret gated like the existing recording-upload route) — reads the already-persisted engine evaluation, writes the real verdict onto `Applicant.recruiter_screening`/`recruiter_screening_score`/`screening_status`/`screening_score` (which `report-page.js` and `deep-analysis.js` already render), and on a "Good fit" mapping calls the existing `_provision_invite_for_applicant(stage="functional")` to auto-mint + email the next-stage invite. Added **POST /api/interviews/{sessionId}/screening-outcome** (`interview-engine/apps/api/src/routes/transcript.routes.ts`) as a thin server-to-server relay to the backend route above. Candidate room (`interviewcandidateroom/page.tsx`) now: shows a "Recruiter Screening" header + 5:00 countdown that force-ends the call at 0:00 when the session's stage is `screening`; calls the new screening-outcome route after `/report` resolves; and replaces the end-of-call report card with either a "Continue to Functional Interview" link (fit) or a polite close-out message (not a fit) — the functional-interview experience itself, and every manual recruiter-driven invite/schedule action, are unchanged.
+- **2026-07-20** — Full-interview recordings now get forwarded to Google Drive. Engine (`interview-engine/apps/api/src/routes/interview.routes.ts`) forwards each recording upload to the backend after saving it locally (fire-and-forget), calling the new `uploadRecordingToDrive` (`drive-upload.service.ts`, POSTs to the backend's existing `POST /api/public/interview-session/{session_id}/recording` webhook-secret-gated route) and persists the returned `driveFileId`/`driveUrl` onto two new `InterviewSession` columns `recordingDriveFileId`/`recordingDriveUrl` (Prisma migration `20260720000000_add_recording_drive_fields`) — kept separate from the transcript JSON since `finalizeTranscript()` rewrites that field and would otherwise silently drop a merged `driveUrl`. Also raised Fastify's body/multipart size limit from the 1 MiB default to 500 MiB (`server.ts`) so a full video+audio recording upload doesn't get rejected, and exported `getScreenVideoStream` from `useProctoring.ts` so the recorder can reuse the existing screen-share stream instead of a second `getDisplayMedia` prompt. New backend setting `GOOGLE_DRIVE_FOLDER_NAME` (default `"Recordings"`, `backend/app/config.py`). No new/changed HTTP routes — the recording upload endpoint's request/response shape is unchanged.
 - **2026-07-15** — Team-member email invitations. **POST /api/team/invite** (`backend/app/routers/team.py`) now, after creating the `invited` user, **sends an invitation email** (new `send_team_invite_email` in `backend/app/utils/email_sender.py`) with an accept link `{FRONTEND_URL}/signup?email=…&name=…&invited=1`. Auth, request body (`InviteMemberIn`: `name`, `email`, `designation?`, `user_type`), and success response (`UserOut`) are UNCHANGED; the email is a best-effort side effect (wrapped in try/except, logged on failure — a mail error never fails the invite). Delivery uses the shared `send_html_email` transport (Resend when `RESEND_API_KEY` is set; note Railway blocks direct SMTP, so Resend is required for real delivery there — otherwise it runs in simulation/log mode). The dashboard signup page (`dashboard/app/(auth)/signup/page.js`) now prefills name/email from those query params so the invitee only sets a password; **POST /api/auth/signup** then activates the invited account (status `invited`→`active`) into its org with the role assigned at invite time (existing behavior, unchanged).
 - **2026-07-15** — Dynamic per-candidate avatar routing (multi-instance Pixel Streaming). **NO request/response schema change to any endpoint** — all changes are to emitted link/redirect URLs plus one opt-in client behavior. Emailed interview-room links now carry an optional **`jobId`** query param so an external avatar orchestrator can launch that job's dedicated Lina build as an independent, parallel stream. **GET /i/{token}** (`backend/app/routers/invites.py`) — the 302 redirect `Location` gains `&jobId={invite.job_id}` (omitted when the invite has no `job_id`); `sessionId`/`ih_invite` unchanged. The scheduled + reschedule calendar-invite `interview_link` built in **`backend/app/routers/public.py`** (×2) and **`backend/app/routers/jobs.py`** (×1) likewise gains `&jobId={applicant.job_id}` (omitted when null). **Candidate room** (`interview-engine/apps/web/app/interviewcandidateroom/page.tsx`) reads `?jobId=` and — ONLY when the new build-time env `NEXT_PUBLIC_ORCHESTRATOR_URL` is set — POSTs `{ jobId, sessionId }` to that external orchestrator's `/session` to obtain a per-session Pixel Streaming StreamerId (then 30s heartbeat + DELETE on unmount); unset (default) → the room keeps using the single shared `NEXT_PUBLIC_AVATAR_URL` exactly as before. No new HTTP routes on any of the three services; the orchestrator is a separate self-hosted service outside this API contract.
 - **2026-07-11** — Security hardening: auth requirement, rate limiting, and a typed schedule body (`backend/`). **POST /api/deepseek** (`app/routers/deepseek.py`) now **REQUIRES authentication** — it gained `current_user: User = Depends(get_current_user)`, so it returns **401** if no valid `token` cookie / `Authorization: Bearer <jwt>` is present (previously fully public). Request body (`{ messages, jsonMode? }`) and success response (LLM proxy JSON) are UNCHANGED. **POST /api/auth/login** and **POST /api/auth/signup** (`app/routers/auth.py`) are now **rate-limited** via an in-process fixed-window limiter (login: ~20/60s per IP AND ~8/300s per email; signup: ~10/300s per IP) — they can now return **429 Too Many Requests** ("Too many requests. Please slow down and try again shortly."); request/response bodies are otherwise UNCHANGED. **POST /api/jobs/applicants/{applicant_id}/schedule** (`app/routers/jobs.py`, `schedule_interview`) — the request body changed from an untyped `dict` to the typed Pydantic model **`ScheduleInterviewIn`** (`app/schemas.py`): `scheduled_at: str` (required, ISO-8601, trailing 'Z' accepted) and `stage: str = "functional"` (`'screening'` → recruiter-screening stage, any other value → functional interview stage). Auth (session + `_verify_applicant_access` org ownership) and the success response (`ApplicantOut`) are UNCHANGED; malformed/missing `scheduled_at` → 400, schema-validation failure → 422. **Public endpoints now rate-limited** (`app/routers/public.py`, ~per-IP fixed window; 429 added, bodies/responses UNCHANGED): **GET /api/public/schedule/{token}** (~60/60s), **GET /api/public/interview-session/{session_id}** (~60/60s), **GET /api/public/confirm/{token}** (~30/60s), and **POST /api/public/reschedule/{token}** (~30/60s).
@@ -1760,6 +1762,33 @@ Status codes: 200 OK; 404 "Career page not found" (no Organisation has the given
 
 Notes: Plain dict response (no response_model). Resolves the Organisation by `career_subdomain`; `jobs` is filtered to that org AND `is_job_listed == True` AND `status == published` (JobStatus.published). Each job `id` is stringified; `title` falls back to `role_name` when null.
 
+#### POST /api/public/interview-session/{session_id}/screening-outcome
+
+Server-to-server route called by the interview engine (`POST /api/interviews/{sessionId}/screening-outcome`) immediately after a **recruiter-screening** interview has been scored. Reads the already-persisted evaluation off the shared engine `InterviewSession` row (never trusts the caller), records the real screening verdict onto the applicant, and — only when the candidate is a fit — auto-provisions and emails the functional-interview invite via the existing `_provision_invite_for_applicant(stage="functional")` path.
+
+- **Auth:** optional shared-secret header `X-Webhook-Secret`, checked against `settings.WEBHOOK_SECRET` when that setting is non-empty (permissive — no check — when unset, so local dev needs no keys). Same pattern as the existing recording-upload webhook.
+- **Path params:** `session_id`:UUID — the Applicant id / engine InterviewSession id.
+- **Query params:** none
+
+Request: none
+
+Response (fits — invite minted):
+```json
+{ "fits": true, "link": "string", "sent": true }
+```
+Response (fits — already advanced to functional previously; idempotent replay):
+```json
+{ "fits": true, "alreadyAdvanced": true, "link": "string | null" }
+```
+Response (does not fit):
+```json
+{ "fits": false, "fitLabel": "Moderate fit" | "Poor fit" }
+```
+
+Status codes: 200 OK; 403 "Invalid webhook secret." (secret configured and mismatched); 404 "Applicant not found."; 409 "Screening evaluation is not ready yet." (engine session missing or not yet evaluated).
+
+Notes: Maps the engine's `evaluation.recommendation` (`strong_proceed`/`proceed` → `"Good fit"`, `hold`/`needs_human_review` → `"Moderate fit"`, `reject` → `"Poor fit"`) onto `Applicant.recruiter_screening`, mirrors the score onto `recruiter_screening_score` and `screening_score`, and sets `screening_status = InterviewStatus.completed`. These are the exact fields `dashboard/src/dashboard/report-page.js` (`renderScreeningPane`) and `dashboard/src/dashboard/deep-analysis.js` (`screeningBlock` + funnel stage dots) already read, so the real result surfaces there with no dashboard changes. Only a `"Good fit"` mapping triggers `_provision_invite_for_applicant` (mints invite, re-runs `sync_applicant_to_ai`, binds the invite token, emails it) — an applicant who already has `functional_status` set is treated as already-advanced and is never re-provisioned.
+
 ### `backend/app/routers/leaderboard.py`
 
 #### GET /api/leaderboard/jobs/{job_id}
@@ -3364,6 +3393,22 @@ When engine is 'deterministic', `evaluation` is whatever evaluateInterview(sessi
 Status codes: 200 OK (engine 'transcript_llm' or 'deterministic'); 404 Not Found {"error":"Session not found"} (unknown sessionId at the route guard); 500 Internal Server Error {"error":<message|'Report generation failed'>} (both LLM report and deterministic fallback threw).
 
 Notes: Global rate limit. Always calls finalizeTranscript(sessionId) first. Tries generateTranscriptReport (DeepSeek); on any error logs a warning and tries evaluateInterview; only if BOTH fail does it 500. The LLM report path persists the report onto session.evaluation and sets session.status='EVALUATED'.
+
+#### POST /api/interviews/{sessionId}/screening-outcome
+
+Recruiter-screening only: called by the candidate room right after `/report` succeeds. Forwards server-to-server to the FastAPI backend (`POST /api/public/interview-session/{session_id}/screening-outcome`, `X-Webhook-Secret: process.env.ENGINE_WEBHOOK_SECRET`), which reads the evaluation this route's sibling `/report` just persisted, decides fit, and — on a fit — auto-mints + emails the functional-interview invite. This route is a thin relay: it does no DB access itself.
+
+- **Auth:** public (candidate room calls it directly, no token).
+- **Path params:** `sessionId`:string — the interview session id.
+- **Query params:** none
+
+Request: none
+
+Response: relays the backend's JSON body and status code verbatim — see `POST /api/public/interview-session/{session_id}/screening-outcome` above for the shape (`{fits, link?, sent?, alreadyAdvanced?, fitLabel?}`).
+
+Status codes: relayed from the backend (200/403/404/409); 503 `{"error": "Backend not configured for screening outcome routing."}` when `BACKEND_URL` is unset; 502 `{"error": "Failed to reach backend for screening outcome."}` on a network failure reaching the backend.
+
+Notes: Requires `BACKEND_URL` and `ENGINE_WEBHOOK_SECRET` env vars on the engine (same vars already used by `drive-upload.service.ts` for recording uploads). The candidate room only calls this when the session's `InterviewSession.settings.stage === 'screening'` (stamped by `backend/app/utils/ai_sync.py sync_applicant_to_ai`); functional-interview sessions never call it.
 
 #### GET /api/interviews/{sessionId}/transcript/file
 

@@ -165,6 +165,20 @@ export const TheProblemSection = () => {
   const row2Ref    = useRef(null);
   const ctaRef     = useRef(null);
 
+  // Wait for Lenis + scrollWrapper to be ready before creating ScrollTrigger animations
+  const [scrollReady, setScrollReady] = useState(false);
+
+  useEffect(() => {
+    if (window.__lenis && window.__scrollWrapper) { setScrollReady(true); return; }
+    const id = setInterval(() => {
+      if (window.__lenis && window.__scrollWrapper) {
+        clearInterval(id);
+        setScrollReady(true);
+      }
+    }, 50);
+    return () => clearInterval(id);
+  }, []);
+
   // IntersectionObserver — same pattern as TransitionSection
   const [inView, setInView]         = useState(false);
   const [hasEntered, setHasEntered] = useState(false);
@@ -187,9 +201,20 @@ export const TheProblemSection = () => {
     return () => observer.disconnect();
   }, [hasEntered]);
 
-  // GSAP scrub — runs on top of CSS boom-in anims
+  // GSAP scrub — only after scrollReady so the scroller target is guaranteed
   useGSAP(() => {
+    if (!scrollReady) return;
     const wrapper = window.__scrollWrapper || window;
+
+    // Resolve start/end as explicit scroll offsets instead of ScrollTrigger's
+    // string syntax. Because this section sits under a -100vh negative-margin
+    // overlap inside the fixed Lenis wrapper, ST mis-measures the element and
+    // collapses 'top 70%' / 'bottom 0%' into a zero-length (start === end) range,
+    // so the scrub never advances and the rows sit frozen. Computing the offsets
+    // ourselves from the live Lenis scroll + the element rect fixes that.
+    const secTop     = () => (window.__lenis?.scroll ?? 0) + sectionRef.current.getBoundingClientRect().top;
+    const scrubStart = () => secTop() - window.innerHeight * 0.7;        // ≈ 'top 70%'
+    const scrubEnd   = () => secTop() + sectionRef.current.offsetHeight; // ≈ 'bottom 0%'
 
     // Row 1 → scrubs LEFT as user scrolls down
     if (row1Ref.current) {
@@ -201,8 +226,9 @@ export const TheProblemSection = () => {
         scrollTrigger: {
           trigger: sectionRef.current,
           scroller: wrapper,
-          start: 'top 70%',
-          end: 'bottom 0%',
+          start: scrubStart,
+          end: scrubEnd,
+          invalidateOnRefresh: true,
           scrub: 1.4,
         },
       });
@@ -220,8 +246,9 @@ export const TheProblemSection = () => {
           scrollTrigger: {
             trigger: sectionRef.current,
             scroller: wrapper,
-            start: 'top 70%',
-            end: 'bottom 0%',
+            start: scrubStart,
+            end: scrubEnd,
+            invalidateOnRefresh: true,
             scrub: 1.4,
           },
         }
@@ -245,16 +272,9 @@ export const TheProblemSection = () => {
         }
       );
     }
-  }, { scope: sectionRef });
 
-  // Lenis readiness refresh
-  useEffect(() => {
-    if (window.__lenis) { ScrollTrigger.refresh(); return; }
-    const id = setInterval(() => {
-      if (window.__lenis) { clearInterval(id); ScrollTrigger.refresh(); }
-    }, 80);
-    return () => clearInterval(id);
-  }, []);
+    ScrollTrigger.refresh();
+  }, { scope: sectionRef, dependencies: [scrollReady] });
 
   return (
     <section
